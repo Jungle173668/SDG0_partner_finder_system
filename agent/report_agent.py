@@ -156,6 +156,8 @@ def _progress_bar(pct: float, quality: str) -> str:
 
 def _contact_links(company: dict) -> str:
     parts = []
+    if company.get("url"):
+        parts.append(f'<a href="{company["url"]}" target="_blank" class="link-btn sdgzero">SDGZero</a>')
     if company.get("website"):
         parts.append(f'<a href="{company["website"]}" target="_blank" class="link-btn">Website</a>')
     linkedin = company.get("linkedin", "") or ""
@@ -466,12 +468,13 @@ def _render_radar(scored: list[dict], research: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def _render_criteria(filters: dict, fallback_lvl: int,
-                     n_candidates: int, n_scored: int) -> str:
+                     n_candidates: int, n_scored: int,
+                     user_company_desc: str = "",
+                     partner_type_desc: str = "") -> str:
     chips = ""
     for k, v in (filters or {}).items():
         if isinstance(v, list):
             for item in v:
-                # SDG filters: show number + tooltip with full name
                 sdg_key = _sdg_number(item)
                 if sdg_key:
                     short = _SDG_NAMES.get(sdg_key, "")
@@ -493,12 +496,44 @@ def _render_criteria(filters: dict, fallback_lvl: int,
 
     summary = f'<span class="criteria-summary">{n_candidates} candidates → {n_scored} recommended</span>'
 
+    # Build the chips row — if no filters, show a "no filters" label
+    if chips:
+        chips_row = f'<div class="criteria-chips">{chips}</div>'
+    else:
+        chips_row = '<div class="criteria-chips"><span class="criteria-chip">No filters applied — semantic search only</span></div>'
+
+    # Company description snippet (shown when provided)
+    desc_section = ""
+    if user_company_desc.strip():
+        short_desc = user_company_desc.strip()[:200]
+        if len(user_company_desc.strip()) > 200:
+            short_desc += "…"
+        desc_section = f"""
+      <div class="criteria-desc-row">
+        <span class="criteria-label">Your company:</span>
+        <span class="criteria-desc-text">{short_desc}</span>
+      </div>"""
+
+    # Partner type — what kind of partner the user is looking for
+    hyde_section = ""
+    if partner_type_desc.strip():
+        short_pt = partner_type_desc.strip()[:220]
+        if len(partner_type_desc.strip()) > 220:
+            short_pt += "…"
+        hyde_section = f"""
+      <div class="criteria-desc-row">
+        <span class="criteria-label">Searched for:</span>
+        <span class="criteria-desc-text criteria-desc-hyde">{short_pt}</span>
+      </div>"""
+
     return f"""
     <div class="criteria-card">
       <div class="criteria-top">
-        <div class="criteria-chips">{chips}</div>
+        {chips_row}
         <div>{summary}</div>
       </div>
+      {desc_section}
+      {hyde_section}
       {warning}
     </div>"""
 
@@ -538,6 +573,12 @@ h1 { font-size: 20px; font-weight: 700; color: #111827; margin-bottom: 4px; }
 .criteria-warn-row { margin-top: 10px; padding: 6px 10px; border-radius: 8px; font-size: 12px;
                      background: #fef3c7; color: #92400e; border: 1px solid #fde68a; }
 .criteria-summary { font-size: 13px; color: #6b7280; white-space: nowrap; }
+.criteria-desc-row { margin-top: 10px; display: flex; gap: 8px; align-items: baseline;
+                     flex-wrap: wrap; }
+.criteria-label { font-size: 11px; font-weight: 700; color: #9ca3af; text-transform: uppercase;
+                  letter-spacing: 0.06em; white-space: nowrap; }
+.criteria-desc-text { font-size: 13px; color: #374151; line-height: 1.5; }
+.criteria-desc-hyde { color: #6b7280; font-style: italic; }
 
 /* Cards */
 .card { background: #fff; border: 1px solid #e5e7eb; border-radius: 12px;
@@ -565,6 +606,7 @@ h1 { font-size: 20px; font-weight: 700; color: #111827; margin-bottom: 4px; }
             border: 1px solid #e5e7eb; transition: background 0.15s; }
 .link-btn:hover { background: #e5e7eb; }
 .link-btn.linkedin { background: #eff6ff; color: #1d4ed8; border-color: #bfdbfe; }
+.link-btn.sdgzero  { background: #f0fdf4; color: #15803d; border-color: #bbf7d0; }
 
 /* Analysis tab */
 .section-title { font-size: 11px; font-weight: 700; letter-spacing: 0.08em;
@@ -623,8 +665,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
 <body>
 <div class="container">
   <h1>SDGZero Partner Finder</h1>
-  <p class="subtitle">Session: {session_id} &nbsp;·&nbsp; {search_method} search
-     &nbsp;·&nbsp; fallback level {fallback_lvl}</p>
+  <p class="subtitle">Top {n_scored} partner recommendations &nbsp;·&nbsp; {search_method} search</p>
 
   {criteria_bar}
 
@@ -689,12 +730,18 @@ def report_agent_node(state: AgentState) -> dict:
     fallback_lvl = state.get("search_fallback_level", 0)
     search_method = state.get("search_method", "semantic")
     session_id  = state.get("session_id", "unknown")
+    user_desc        = state.get("user_company_desc", "")
+    partner_type_desc = state.get("partner_type_desc", "")
 
     if not scored:
         logger.warning("ReportAgent: no scored_companies — generating empty report")
 
     # Render pieces
-    criteria_bar = _render_criteria(filters, fallback_lvl, len(candidates), len(scored))
+    criteria_bar = _render_criteria(
+        filters, fallback_lvl, len(candidates), len(scored),
+        user_company_desc=user_desc,
+        partner_type_desc=partner_type_desc,
+    )
 
     cards = ""
     for i, company in enumerate(scored, 1):
@@ -711,6 +758,7 @@ def report_agent_node(state: AgentState) -> dict:
         session_id=session_id,
         search_method=search_method,
         fallback_lvl=fallback_lvl,
+        n_scored=len(scored),
         criteria_bar=criteria_bar,
         cards=cards or "<p>No recommendations generated.</p>",
         sdg_matrix=sdg_matrix,

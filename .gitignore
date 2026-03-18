@@ -40,3 +40,6 @@ logs/
 
 # Claude Code
 .claude/
+
+# plan
+plan.md
