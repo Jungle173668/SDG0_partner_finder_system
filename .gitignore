@@ -38,7 +38,7 @@ Thumbs.db
 *.log
 logs/
 
-# Claude Code
+# IDE / tools
 .claude/
 
 # plan
