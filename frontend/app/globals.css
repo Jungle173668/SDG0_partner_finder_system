@@ -1,0 +1,57 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* SDGZero brand tokens */
+:root {
+  --sdg-navy:   #0a1f3c;
+  --sdg-teal:   #00a896;
+  --sdg-amber:  #f4a11d;
+}
+
+@layer base {
+  html {
+    font-family: Inter, system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    background-color: #f8f9fc;
+    color: var(--sdg-navy);
+  }
+}
+
+@layer components {
+  /* Brand button */
+  .btn-primary {
+    @apply bg-teal text-white font-semibold py-3 px-8 rounded-lg
+           hover:bg-teal-light active:scale-95 transition-all
+           disabled:opacity-50 disabled:cursor-not-allowed;
+  }
+
+  /* Hard / Soft toggle pill */
+  .mode-pill {
+    @apply text-xs font-semibold px-2.5 py-1 rounded-full border cursor-pointer
+           transition-colors select-none;
+  }
+  .mode-pill-hard {
+    @apply bg-navy text-white border-navy;
+  }
+  .mode-pill-soft {
+    @apply bg-white text-gray-600 border-gray-400;
+  }
+  .mode-pill-inactive {
+    @apply bg-transparent text-gray-400 border-gray-300 hover:border-gray-400;
+  }
+
+  /* Form section card */
+  .form-card {
+    @apply bg-white rounded-2xl shadow-sm border border-gray-100 p-6;
+  }
+
+  /* Filter select */
+  .filter-select {
+    @apply w-full border border-gray-200 rounded-lg px-3 py-2.5 text-sm
+           text-navy bg-white focus:outline-none focus:ring-2 focus:ring-teal/40
+           focus:border-teal transition-colors;
+  }
+}

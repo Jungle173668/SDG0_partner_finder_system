@@ -23,6 +23,12 @@ ml/models/
 
 # Generated outputs
 reports/
+sessions/
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
 
 # IDE
 .vscode/

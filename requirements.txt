@@ -17,3 +17,7 @@ accelerate==1.10.1
 torch==2.2.2
 scikit-learn==1.6.1
 numpy==1.26.4
+
+# ── API 服务 (Phase 3) ───────────────────────────────
+fastapi==0.115.5
+uvicorn[standard]==0.32.1

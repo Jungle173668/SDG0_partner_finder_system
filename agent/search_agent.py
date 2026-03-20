@@ -303,12 +303,23 @@ def search_agent_node(state: AgentState) -> dict:
     #   Level 1: drop SDG + claimed (most strict)   → retry
     #   Level 2: pure semantic, all filters dropped → always returns results
     # ------------------------------------------------------------------
-    MIN_RESULTS = 5
-    MIN_SIMILARITY = 0.35   # below this, filters are hurting more than helping
+    MIN_RESULTS = 5   # pad with semantic results if filtered set is smaller
 
     candidates = []
     method = "semantic"
     fallback_level = 0
+
+    def _pad_with_semantic(existing: list, target: int) -> list:
+        """
+        Supplement existing results with semantic search up to `target` total.
+        Existing (filtered) results always come first and are never discarded.
+        """
+        if len(existing) >= target:
+            return existing
+        seen_ids = {c.get("id") for c in existing}
+        semantic = semantic_search_from_embedding(avg_embedding, n_results=target)
+        extras = [c for c in semantic if c.get("id") not in seen_ids]
+        return existing + extras[: target - len(existing)]
 
     if has_desc and has_filters:
         # hybrid: vector + metadata
@@ -316,29 +327,23 @@ def search_agent_node(state: AgentState) -> dict:
         candidates = hybrid_search(avg_embedding, filters, n_results=10)
         logger.info(f"SearchAgent: hybrid_search → {len(candidates)} results (level 0)")
 
-        # Check similarity quality — if filters returned enough candidates but
-        # none are semantically relevant, they filtered INTO noise rather than
-        # filtering OUT noise. Fall back to pure semantic immediately.
-        best_sim = max((c.get("similarity", 0) for c in candidates), default=0)
-        if candidates and best_sim < MIN_SIMILARITY:
-            candidates = semantic_search_from_embedding(avg_embedding, n_results=10)
-            fallback_level = 2
-            method = "semantic"
-            logger.info(
-                f"SearchAgent: hybrid best_sim={best_sim:.3f} < {MIN_SIMILARITY} "
-                f"→ quality fallback to pure semantic (level 2)"
-            )
-        elif len(candidates) < MIN_RESULTS:
+        if len(candidates) == 0:
+            # No results at all — relax SDG + claimed and retry
             relaxed = _relax_filters(filters, level=1)
             candidates = hybrid_search(avg_embedding, relaxed, n_results=10)
             fallback_level = 1
             logger.info(f"SearchAgent: hybrid relaxed → {len(candidates)} results (level 1)")
 
-            if len(candidates) < MIN_RESULTS:
-                candidates = semantic_search_from_embedding(avg_embedding, n_results=10)
-                fallback_level = 2
-                method = "semantic"
-                logger.info(f"SearchAgent: fallback to pure semantic → {len(candidates)} results (level 2)")
+        if len(candidates) == 0:
+            # Still nothing — drop all filters, pure semantic
+            candidates = semantic_search_from_embedding(avg_embedding, n_results=10)
+            fallback_level = 2
+            method = "semantic"
+            logger.info(f"SearchAgent: fallback to pure semantic → {len(candidates)} results (level 2)")
+        elif len(candidates) < MIN_RESULTS:
+            # Have some filtered results — pad with semantic, don't discard them
+            candidates = _pad_with_semantic(candidates, MIN_RESULTS)
+            logger.info(f"SearchAgent: padded to {len(candidates)} results (kept filtered, added semantic)")
 
     elif has_filters and not has_desc:
         # pure filter: no vector search
@@ -346,17 +351,20 @@ def search_agent_node(state: AgentState) -> dict:
         candidates = sql_filter(filters, n_results=10)
         logger.info(f"SearchAgent: sql_filter → {len(candidates)} results (level 0)")
 
-        if len(candidates) < MIN_RESULTS:
+        if len(candidates) == 0:
             relaxed = _relax_filters(filters, level=1)
             candidates = sql_filter(relaxed, n_results=10)
             fallback_level = 1
             logger.info(f"SearchAgent: sql relaxed → {len(candidates)} results (level 1)")
 
-        if len(candidates) < MIN_RESULTS:
+        if len(candidates) == 0:
             candidates = semantic_search_from_embedding(avg_embedding, n_results=10)
             fallback_level = 2
             method = "semantic"
             logger.info(f"SearchAgent: fallback to pure semantic → {len(candidates)} results (level 2)")
+        elif len(candidates) < MIN_RESULTS:
+            candidates = _pad_with_semantic(candidates, MIN_RESULTS)
+            logger.info(f"SearchAgent: padded to {len(candidates)} results (kept filtered, added semantic)")
 
     else:
         # pure semantic: no filters

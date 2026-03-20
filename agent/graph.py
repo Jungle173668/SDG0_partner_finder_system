@@ -131,6 +131,7 @@ def run_pipeline(
     user_company_desc: str,
     partner_type_desc: str = "",
     filters: Optional[dict] = None,
+    soft_filters: Optional[dict] = None,
     other_requirements: str = "",
     session_id: Optional[str] = None,
 ) -> AgentState:
@@ -165,6 +166,7 @@ def run_pipeline(
         "user_company_desc": user_company_desc,
         "partner_type_desc": partner_type_desc,
         "filters": filters or {},
+        "soft_filters": soft_filters or {},
         "other_requirements": other_requirements,
         "errors": [],
     }

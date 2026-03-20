@@ -36,6 +36,11 @@ def run():
     store.upsert(businesses)
 
     print(f"\nDone! ChromaDB now has {store.count()} businesses.")
+
+    # Invalidate schema disk cache so next API call reflects new data
+    from agent.schema_cache import invalidate_cache
+    invalidate_cache()
+    print("Schema disk cache cleared.")
     print("Run demo_search.py to test semantic search.")
 
 

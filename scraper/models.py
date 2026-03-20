@@ -7,6 +7,7 @@ import re
 from html import unescape
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional
+from db.sdg_normalize import normalize_sdg_tags
 
 
 def strip_html(text: str) -> str:
@@ -141,10 +142,10 @@ class Business(BaseModel):
     @field_validator("sdg_tags", mode="before")
     @classmethod
     def extract_sdg_names_from_post_tags(cls, v):
-        """post_tags is a list of {id, name, slug} dicts — extract and unescape names only."""
+        """post_tags is a list of {id, name, slug} dicts — extract, unescape, and normalise names."""
         if isinstance(v, list):
             names = [unescape(t["name"]) for t in v if isinstance(t, dict) and t.get("name")]
-            return names or None
+            return normalize_sdg_tags(names) or None
         return None
 
     @field_validator("membership_tier", mode="before")

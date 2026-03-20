@@ -351,21 +351,25 @@ def build_chroma_where(filters: dict) -> Optional[dict]:
     return {"$and": conditions}
 
 
-def post_filter_categories(results: list[dict], category: str) -> list[dict]:
+def post_filter_categories(results: list[dict], category) -> list[dict]:
     """
     Python-side category filter (comma-separated field, substring match).
 
     Args:
         results:  List of business dicts.
-        category: Single category string, e.g. "Energy & Renewables".
+        category: Single category string OR list of category strings.
 
     Returns:
-        Filtered list (companies whose categories field contains the value).
+        Filtered list — companies whose categories field contains ANY of the values.
     """
     if not category:
         return results
-    cat_lower = category.lower()
-    return [r for r in results if cat_lower in (r.get("categories", "") or "").lower()]
+    cats = [category] if isinstance(category, str) else category
+    cats_lower = [c.lower() for c in cats if c]
+    if not cats_lower:
+        return results
+    field = lambda r: (r.get("categories", "") or "").lower()
+    return [r for r in results if any(c in field(r) for c in cats_lower)]
 
 
 def post_filter_sdg(results: list[dict], sdg_tags: list[str]) -> list[dict]:

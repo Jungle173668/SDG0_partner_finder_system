@@ -64,7 +64,16 @@ class AgentState(TypedDict, total=False):
     """User's free-text description of their own company. Core anchor for all agents."""
 
     filters: SearchFilters
-    """Structured filter conditions from the search form."""
+    """Structured filter conditions from the search form (Hard filters — go into WHERE clause)."""
+
+    soft_filters: SearchFilters
+    """
+    Soft filter conditions from the search form (user marked as 'Preferred', not 'Must').
+    NOT passed to the database WHERE clause — bypasses SQL entirely.
+    Passed to ScoringAgent as bonus scoring criteria:
+      - Companies satisfying soft conditions rank higher
+      - Companies NOT satisfying them are still included (not excluded)
+    """
 
     other_requirements: str
     """Free-text additional requirements. Appended to semantic search context."""

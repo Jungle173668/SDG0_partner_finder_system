@@ -173,6 +173,7 @@ _REASONING_HUMAN = """\
 My company (the user seeking a partner):
 {user_company_desc}
 {extra_requirements}
+{soft_filter_context}
 Candidate partner to evaluate:
 {company_profile}
 
@@ -214,9 +215,54 @@ def _build_company_profile(company: dict, research_summary: str) -> str:
     return header
 
 
+def _check_soft_filters(company: dict, soft_filters: dict) -> list[str]:
+    """
+    Check which soft filter conditions a company satisfies.
+
+    Returns a list of human-readable strings describing satisfied conditions.
+    e.g. ["SDG 7: Affordable And Clean Energy", "City: London", "Type: B2B"]
+    """
+    hits = []
+    if not soft_filters:
+        return hits
+
+    city = soft_filters.get("city")
+    if city and company.get("city", "").lower() == city.lower():
+        hits.append(f"City: {city}")
+
+    biz_type = soft_filters.get("business_type")
+    if biz_type and company.get("business_type", "").lower() == biz_type.lower():
+        hits.append(f"Type: {biz_type}")
+
+    job_sector = soft_filters.get("job_sector")
+    if job_sector and company.get("job_sector", "").lower() == job_sector.lower():
+        hits.append(f"Sector: {job_sector}")
+
+    company_size = soft_filters.get("company_size")
+    if company_size and company.get("company_size", "").lower() == company_size.lower():
+        hits.append(f"Size: {company_size}")
+
+    sdg_tags = soft_filters.get("sdg_tags", [])
+    if sdg_tags:
+        company_sdgs = (company.get("sdg_tags") or "") + " " + (company.get("predicted_sdg_tags") or "")
+        for tag in sdg_tags:
+            if tag.lower() in company_sdgs.lower():
+                hits.append(f"SDG: {tag}")
+
+    categories = soft_filters.get("categories", [])
+    if categories:
+        company_cats = company.get("categories") or ""
+        for cat in categories:
+            if cat.lower() in company_cats.lower():
+                hits.append(f"Category: {cat}")
+
+    return hits
+
+
 def _run_reasoning(
     user_company_desc: str,
     other_requirements: str,
+    soft_filters: dict,
     company: dict,
     research_summary: str,
 ) -> str:
@@ -237,9 +283,19 @@ def _run_reasoning(
     extra = f"\nAdditional requirements for the ideal partner (NOT about my company): {other_requirements}" if other_requirements.strip() else ""
     company_profile = _build_company_profile(company, research_summary)
 
+    # Build soft filter context hint for LLM
+    soft_hits = _check_soft_filters(company, soft_filters)
+    if soft_hits and soft_filters:
+        soft_ctx = "\nPreferred partner criteria (mention if relevant in your reasoning): " + "; ".join(
+            f"{k}: {v}" for k, v in soft_filters.items() if v
+        )
+    else:
+        soft_ctx = ""
+
     prompt = _REASONING_HUMAN.format(
         user_company_desc=user_company_desc,
         extra_requirements=extra,
+        soft_filter_context=soft_ctx,
         company_profile=company_profile,
     )
 
@@ -308,6 +364,7 @@ def scoring_agent_node(state: AgentState) -> dict:
     research      = state.get("research_results", {})
     user_desc     = state.get("user_company_desc", "")
     other_req     = state.get("other_requirements", "")
+    soft_filters  = state.get("soft_filters") or {}
     fallback_lvl  = state.get("search_fallback_level", 0)
     errors        = list(state.get("errors") or [])
 
@@ -372,7 +429,7 @@ def scoring_agent_node(state: AgentState) -> dict:
         company["match_quality"]   = _assign_match_quality(
             company["cross_encoder_score"], fallback_lvl
         )
-        company["soft_filter_hit"] = []  # Phase 3: populated when soft filters are added
+        company["soft_filter_hit"] = _check_soft_filters(company, soft_filters)
 
     # ------------------------------------------------------------------
     # Step 2: LLM reasoning — sequential, one call per Top-5 company
@@ -394,6 +451,7 @@ def scoring_agent_node(state: AgentState) -> dict:
             reasoning = _run_reasoning(
                 user_company_desc=user_desc,
                 other_requirements=other_req,
+                soft_filters=soft_filters,
                 company=company,
                 research_summary=research_summary,
             )

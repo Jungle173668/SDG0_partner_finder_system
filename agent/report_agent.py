@@ -140,16 +140,25 @@ def _parse_sdg_tags(company: dict) -> tuple[list[str], list[str]]:
 
     tagged    = _split(company.get("sdg_tags", "") or "")
     predicted = _split(company.get("predicted_sdg_tags", "") or "")
-    predicted = [p for p in predicted if p not in tagged]
+    tagged_lower = {t.lower().strip() for t in tagged}
+    predicted = [p for p in predicted if p.lower().strip() not in tagged_lower]
     return tagged, predicted
 
 
 def _sdg_icon_src(sdg_key: str) -> str:
-    """Return relative path to local SDG icon (works for file:// reports)."""
+    """
+    Return path to local SDG icon.
+
+    Uses /static/... (server-absolute) when REPORT_STATIC_BASE env is set to 'server',
+    otherwise falls back to ../static/... (relative, for file:// direct open).
+    """
     m = re.search(r'(\d+)', sdg_key)
     if not m:
         return ""
     n = m.group(1)
+    base = os.getenv("REPORT_STATIC_BASE", "relative")
+    if base == "server":
+        return f"/static/sdg-icons/{n}.png"
     return f"../static/sdg-icons/{n}.png"
 
 
@@ -173,7 +182,8 @@ def _sdg_icon_pill(label: str, kind: str) -> str:
     suffix = " ★" if kind == "predicted" else ""
     cls = "sdg-icon-pill pred" if kind == "predicted" else "sdg-icon-pill hit"
     img = f'<img src="{icon_src}" alt="{sdg_key}">' if icon_src else ""
-    return f'<div class="{cls}" title="{short}{" (predicted)" if kind == "predicted" else ""}">{img}{sdg_key}{suffix}</div>'
+    tooltip = f"{sdg_key} · {short}{' (predicted)' if kind == 'predicted' else ''}"
+    return f'<div class="{cls}" title="{tooltip}" data-tip="{tooltip}">{img}{sdg_key}{suffix}</div>'
 
 
 def _bar_fill_class(quality: str) -> str:
@@ -407,31 +417,51 @@ def _render_radar(scored: list[dict], research: dict) -> str:
 # Search summary bar
 # ---------------------------------------------------------------------------
 
+def _pill_for_filter(k: str, v, mode: str) -> str:
+    """Render one filter condition as a pill (must/preferred)."""
+    css = "pill hard" if mode == "hard" else "pill soft"
+    label_suffix = " (must)" if mode == "hard" else " (preferred)"
+    if isinstance(v, list):
+        out = ""
+        for item in v:
+            sdg_key = _sdg_number(item)
+            label = sdg_key if sdg_key else item
+            out += f'<span class="{css}">{label}{label_suffix}</span>'
+        return out
+    if v is True or v == "Yes":
+        label = {"claimed": "Verified"}.get(k, k.replace("_", " ").title())
+        return f'<span class="{css}">{label}{label_suffix}</span>'
+    return f'<span class="{css}">{v}{label_suffix}</span>'
+
+
 def _render_criteria(filters: dict, fallback_lvl: int,
                      n_candidates: int, n_scored: int,
                      user_company_desc: str = "",
-                     partner_type_desc: str = "") -> str:
+                     partner_type_desc: str = "",
+                     soft_filters: dict = None) -> str:
     pills = ""
     for k, v in (filters or {}).items():
-        if isinstance(v, list):
-            for item in v:
-                sdg_key = _sdg_number(item)
-                label = f"{sdg_key}" if sdg_key else item
-                pills += f'<span class="pill hard">{label}</span>'
-        elif v is True:
-            label = {"claimed": "Verified"}.get(k, k.replace("_", " ").title())
-            pills += f'<span class="pill hard">{label}</span>'
-        else:
-            pills += f'<span class="pill hard">{v}</span>'
+        pills += _pill_for_filter(k, v, "hard")
+    for k, v in (soft_filters or {}).items():
+        pills += _pill_for_filter(k, v, "soft")
 
     if not pills:
-        pills = '<span class="pill">No filters — semantic search</span>'
+        pills = '<span class="pill">Semantic search only</span>'
 
+    # Specific fallback message — level 1 relaxes sdg_tags + claimed
     fallback_tag = ""
     if fallback_lvl == 1:
-        fallback_tag = '<span class="fallback-tag">⚠ Filters relaxed</span>'
+        relaxed = []
+        if (filters or {}).get("sdg_tags"):
+            relaxed.append("SDG tags")
+        if (filters or {}).get("claimed"):
+            relaxed.append("Verified")
+        if (filters or {}).get("categories"):
+            relaxed.append("Categories")
+        relaxed_str = " & ".join(relaxed) if relaxed else "some conditions"
+        fallback_tag = f'<span class="fallback-tag">⚠ {relaxed_str} relaxed — not enough matches</span>'
     elif fallback_lvl == 2:
-        fallback_tag = '<span class="fallback-tag">⚠ Semantic only</span>'
+        fallback_tag = '<span class="fallback-tag">⚠ All filters dropped — semantic only</span>'
 
     desc_row = ""
     if user_company_desc.strip():
@@ -514,6 +544,7 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--sdg-sur
 .pill { font-size:11px; padding:3px 10px; border-radius:20px;
   border:1px solid rgba(255,255,255,0.25); color:rgba(255,255,255,0.85); }
 .pill.hard { background:var(--sdg-teal); border-color:var(--sdg-teal); color:white; font-weight:600; }
+.pill.soft { background:rgba(255,255,255,0.15); border-color:rgba(255,255,255,0.5); color:rgba(255,255,255,0.85); font-weight:600; }
 .summary-right { display:flex; flex-direction:column; align-items:flex-end; gap:6px; }
 .summary-count { font-size:12px; color:rgba(255,255,255,0.65); white-space:nowrap; }
 .fallback-tag { font-size:11px; background:var(--sdg-amber); color:var(--sdg-navy);
@@ -631,7 +662,7 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
   <!-- Brand header -->
   <div class="brand-header">
     <div class="brand-logo">
-      <img src="../static/SDG0logo.png" alt="SDGZero" style="height:40px;">
+      <img src="{logo_src}" alt="SDGZero" style="height:40px;">
       <div style="margin-left:10px">
         <div class="brand-tag" style="font-size:12px;color:var(--sdg-muted);margin-top:2px">Partner Finder System &nbsp;·&nbsp; {search_method} search &nbsp;·&nbsp; Top {n_scored} recommendations</div>
       </div>
@@ -696,6 +727,7 @@ def report_agent_node(state: AgentState) -> dict:
     candidates    = state.get("candidate_companies", [])
     research      = state.get("research_results", {})
     filters       = state.get("filters", {})
+    soft_filters  = state.get("soft_filters") or {}
     fallback_lvl  = state.get("search_fallback_level", 0)
     search_method = state.get("search_method", "semantic")
     session_id    = state.get("session_id", "unknown")
@@ -709,6 +741,7 @@ def report_agent_node(state: AgentState) -> dict:
         filters, fallback_lvl, len(candidates), len(scored),
         user_company_desc=user_desc,
         partner_type_desc=partner_type,
+        soft_filters=soft_filters,
     )
 
     cards = ""
@@ -721,6 +754,9 @@ def report_agent_node(state: AgentState) -> dict:
     glance_cards = _render_glance_cards(scored)
     radar        = _render_radar(scored, research)
 
+    static_base = os.getenv("REPORT_STATIC_BASE", "relative")
+    logo_src = "/static/SDG0logo.png" if static_base == "server" else "../static/SDG0logo.png"
+
     html = _HTML_TEMPLATE.format(
         css=_CSS,
         session_id=session_id,
@@ -732,6 +768,7 @@ def report_agent_node(state: AgentState) -> dict:
         sdg_matrix=sdg_matrix,
         glance_cards=glance_cards,
         radar=radar,
+        logo_src=logo_src,
     )
 
     _REPORTS_DIR.mkdir(exist_ok=True)
