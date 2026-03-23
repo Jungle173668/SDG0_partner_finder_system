@@ -49,3 +49,8 @@ logs/
 
 # plan
 plan.md
+
+# 本地笔记（不上传）
+notes/
+
+schema_cache.json

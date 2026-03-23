@@ -42,13 +42,26 @@ logger = logging.getLogger(__name__)
 
 _HYDE_SYSTEM = """You are an expert at finding ideal business partners from a sustainability-focused directory (SDGZero).
 
-Your job is to help identify the perfect partner for a given company by:
-1. Writing a vivid description of an ideal partner company (as if it's a real company profile)
-2. Generating multiple search phrases to find such companies
+Your job is to write a vivid profile of the ideal partner company and generate search phrases to find them.
+
+Two modes depending on whether a target partner type is specified:
+
+MODE A — Target type specified (e.g. "media company", "logistics provider"):
+  - The partner_description MUST be a company of that exact type.
+  - However, it should be specifically suited to serve or collaborate with the user's company.
+  - Example: user = skin care brand, target = media company
+    → describe a marketing/media agency that works with beauty and wellness brands,
+      NOT a generic media company, NOT another skin care company.
+  - The query_expansions should find that type of company, angled toward the user's industry.
+
+MODE B — No target type specified:
+  - Identify what kind of partner would best complement the user's company.
+  - Think about what the user's company NEEDS most: customers, suppliers, collaborators, investors, etc.
+  - Describe a company that fills that gap and shares compatible SDG/sustainability values.
 
 Write the partner description in the same style as a real company directory listing:
 concrete, specific, mentioning what they DO, their sector, SDG focus, and business model.
-Do NOT be generic. Imagine a real company that would be a great fit.
+Do NOT be generic. Imagine one real company that would be a great fit.
 
 Respond ONLY with valid JSON. No explanation, no markdown.
 """
@@ -63,8 +76,8 @@ _HYDE_HUMAN = """My company:
   "query_expansions": ["<phrase 1>", "<phrase 2>", "<phrase 3>", "<phrase 4>", "<phrase 5>"]
 }}
 
-The partner_description should describe ONE specific ideal partner company.
-The query_expansions should be 3-5 different search angles (e.g. by sector, by SDG, by business model).
+The partner_description must describe ONE specific ideal partner company.
+{expansion_instruction}
 """
 
 
@@ -96,12 +109,27 @@ def _run_hyde(
 
     if partner_type_desc.strip():
         partner_type_instruction = (
-            f"IMPORTANT: The ideal partner MUST BE a {partner_type_desc.strip()}. "
-            f"Write the partner_description as a profile of that type of company — "
-            f"NOT another company like mine.\n\n"
+            f"IMPORTANT — MODE A: The ideal partner MUST be a {partner_type_desc.strip()}.\n"
+            f"Write the partner_description as a profile of that specific type of company "
+            f"that is well-suited to serve or collaborate with MY company described above.\n"
+            f"Focus on what makes this type of company the right fit for MY industry and needs — "
+            f"do NOT describe another company like mine, and do NOT blend the two industries together.\n\n"
+        )
+        expansion_instruction = (
+            f"The query_expansions should find {partner_type_desc.strip()} companies "
+            f"that serve or work with businesses like mine (use industry-specific angles)."
         )
     else:
-        partner_type_instruction = ""
+        partner_type_instruction = (
+            f"MODE B: No specific partner type was given. "
+            f"Based on my company description, identify the most valuable type of partner I need "
+            f"(e.g. a distributor, marketing agency, technology provider, investor, etc.) "
+            f"and describe a company that fills that gap while sharing compatible sustainability values.\n\n"
+        )
+        expansion_instruction = (
+            "The query_expansions should cover different angles: "
+            "by what the partner does, by the sector they serve, and by shared SDG/sustainability focus."
+        )
 
     # Inject filter context so HyDE stays aligned with the user's explicit criteria.
     # E.g. sdg_tags=["Quality Education"] → tell HyDE the partner should focus on
@@ -131,6 +159,7 @@ def _run_hyde(
     prompt = _HYDE_HUMAN.format(
         user_company_desc=user_company_desc,
         partner_type_instruction=partner_type_instruction,
+        expansion_instruction=expansion_instruction,
         filter_context=filter_context,
         extra=extra,
     )
@@ -274,15 +303,22 @@ def search_agent_node(state: AgentState) -> dict:
         # ------------------------------------------------------------------
         # Step 1b: Embed — build search vector
         #
-        # When partner_type_desc is explicit, use partner_desc ONLY (no
-        # expansion averaging). Expansions tend to inject sustainability/SDG
-        # vocabulary that dilutes the signal and pulls toward wrong sectors.
-        # When no partner_type is given, averaging expansions broadens recall
-        # which is helpful for open-ended queries.
+        # When partner_type_desc is explicit, include the raw partner_type
+        # text alongside the HyDE description. This anchors the embedding
+        # toward the correct company TYPE (e.g. "media company") so that
+        # industry vocabulary in HyDE ("beauty", "skincare") doesn't dominate
+        # and pull results toward the wrong sector.
+        # Repeat the raw type 2x to give it stronger weight vs HyDE.
+        #
+        # When no partner_type is given, average HyDE + expansions to broaden
+        # recall across multiple search angles.
         # ------------------------------------------------------------------
         if partner_type:
-            all_texts = [partner_desc]
-            logger.info("SearchAgent: partner_type provided — using HyDE only (no expansion averaging)")
+            all_texts = [partner_type, partner_type, partner_desc]
+            logger.info(
+                "SearchAgent: partner_type provided — "
+                "anchoring embedding with raw type (x2) + HyDE description"
+            )
         else:
             all_texts = [partner_desc] + expansions
         avg_embedding = _averaged_embedding(all_texts)

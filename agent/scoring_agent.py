@@ -51,7 +51,7 @@ _TOP_N = 5              # final Top-N to keep after reranking
 
 # Sigmoid thresholds for match_quality labels (see _assign_match_quality)
 _SCORE_STRONG = 0.70    # >= 70% probability → "strong"
-_SCORE_PARTIAL = 0.2   # >= 20% probability → "partial"; below → "fallback"
+_SCORE_PARTIAL = 0.2    # >= 20% probability → "partial"; below → "fallback"
 
 
 # ---------------------------------------------------------------------------
