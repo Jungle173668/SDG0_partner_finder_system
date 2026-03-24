@@ -236,7 +236,7 @@ def _render_card(rank: int, company: dict, research_source: str) -> str:
         fallback_notice = """
       <div class="fallback-notice">
         <div class="fn-dot"></div>
-        No closer match found within filters — shown for reference only.
+        Low confidence match — shown for reference only.
       </div>"""
 
     return f"""
@@ -379,11 +379,24 @@ def _render_radar(scored: list[dict], research: dict) -> str:
         name  = c.get("name", "?")[:16]
         legend_items += f'<div class="rli"><span class="rld" style="background:{color}"></span>#{i+1} {name}</div>'
 
+    dim_notes = [
+        ("Match %",        "Semantic relevance between this partner and your ideal partner profile"),
+        ("SDG coverage",   "Number of UN Sustainable Development Goals this company actively addresses"),
+        ("Research depth", "How much information is available — database profile + web research"),
+        ("Verified",       "Whether the company has claimed and verified their SDGZero listing"),
+        ("Sector fit",     "How well this company's sector aligns with your stated partnership need"),
+    ]
+    dim_rows = "".join(
+        f'<tr><td class="rdim-label">{n}</td><td class="rdim-desc">{d}</td></tr>'
+        for n, d in dim_notes
+    )
+
     return f"""
     <div class="radar-wrap">
       <div class="radar-cw"><canvas id="radarChart"></canvas></div>
       <div class="rleg">{legend_items}</div>
     </div>
+    <table class="rdim-table"><tbody>{dim_rows}</tbody></table>
     <script>
     (function() {{
       const ctx = document.getElementById('radarChart');
@@ -640,6 +653,11 @@ body { font-family: 'Segoe UI', system-ui, sans-serif; background: var(--sdg-sur
 
 /* Analysis: radar */
 .radar-wrap { display:flex; gap:20px; align-items:flex-start; flex-wrap:wrap; }
+.rdim-table { width:100%; border-collapse:collapse; margin-top:14px; font-size:12px; }
+.rdim-table tr { border-bottom:1px solid var(--sdg-border); }
+.rdim-table tr:last-child { border-bottom:none; }
+.rdim-label { font-weight:600; color:var(--sdg-navy); padding:5px 12px 5px 0; white-space:nowrap; width:110px; }
+.rdim-desc  { color:var(--sdg-muted); padding:5px 0; line-height:1.4; }
 .radar-cw { flex:1; min-width:200px; position:relative; height:260px; }
 .rleg { flex:0 0 160px; font-size:11px; padding-top:8px; }
 .rli { display:flex; align-items:center; gap:7px; margin-bottom:8px;

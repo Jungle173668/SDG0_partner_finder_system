@@ -6,15 +6,15 @@ Responsibilities:
            + Query Expansion (3-5 equivalent search phrases)
   2. Embed: encode all generated texts → average into a single query vector
   3. Search: semantic_search_from_embedding → Top-10 candidate companies
-  4. Write: hypothetical_partner_desc, query_expansions, candidate_companies → AgentState
-
-Step 2 upgrade path:
-  - Add sql_filter and hybrid_search tools with @tool decorators
-  - Replace direct function calls with LLM-based tool routing
-  - Add three-level fallback logic
+  4. LLM-as-Judge + Reflection: evaluate candidate quality, reflect on failure,
+     selectively retry (CRAG) — keeps good results, replaces bad ones
+  5. Write: hypothetical_partner_desc, query_expansions, candidate_companies → AgentState
 
 References:
-  HyDE: Gao et al. 2022, "Precise Zero-Shot Dense Retrieval without Relevance Labels"
+  HyDE:       Gao et al. 2022, "Precise Zero-Shot Dense Retrieval without Relevance Labels"
+  CRAG:       Yan et al. 2024, "Corrective Retrieval Augmented Generation"
+  Reflexion:  Shinn et al. 2023, "Reflexion: Language Agents with Verbal Reinforcement"
+  LLM-Judge:  Zheng et al. 2023, "Judging LLM-as-a-Judge with MT-Bench"
 """
 
 import json
@@ -42,26 +42,38 @@ logger = logging.getLogger(__name__)
 
 _HYDE_SYSTEM = """You are an expert at finding ideal business partners from a sustainability-focused directory (SDGZero).
 
-Your job is to write a vivid profile of the ideal partner company and generate search phrases to find them.
+Your job is to write a profile of the PARTNER company and generate search phrases to find them.
+
+CRITICAL RULE for partner_description:
+  - Based on the user's company's desccription, describe the PARTNER company's own identity: what they DO, their services, sector, SDG focus, business model.
+  - Do NOT repeat or paraphrase the user's company in the description.
+  - The user's company is context — use it to decide WHICH type of partner to describe and WHAT they need,
+    but the final description must read like the partner's own company profile, not a description of who they serve.
 
 Two modes depending on whether a target partner type is specified:
 
 MODE A — Target type specified (e.g. "media company", "logistics provider"):
-  - The partner_description MUST be a company of that exact type.
-  - However, it should be specifically suited to serve or collaborate with the user's company.
-  - Example: user = skin care brand, target = media company
-    → describe a marketing/media agency that works with beauty and wellness brands,
-      NOT a generic media company, NOT another skin care company.
-  - The query_expansions should find that type of company, angled toward the user's industry.
+  - The target type may be explicit ("media company") OR vague ("companies who may need our products").
+  - If the target type is VAGUE or intent-based (e.g. "companies who need X", "potential customers"):
+      → First INFER the actual industry/company type from the user's business context.
+      → e.g. user = sports nutrition company, target = "companies who may need our products"
+        → infer: gyms, fitness centres, sports clubs, sports retailers, athletic training facilities
+        → describe ONE of those inferred types
+  - If the target type is EXPLICIT ("gym", "media company", "logistics provider"):
+      → describe a company of that exact type directly
+  - In both cases: describe what the PARTNER does — their services, sector, SDG alignment, business model.
+  - Keep user's industry context only in query_expansions, NOT in partner_description.
+  - Example: user = skin care brand, target = "media company"
+    WRONG: "A media agency specialising in beauty and wellness brands..."
+    RIGHT:  "A digital marketing and PR agency offering brand storytelling, social media management,
+             influencer campaigns, and content creation. SDG focus on responsible consumption..."
 
 MODE B — No target type specified:
   - Identify what kind of partner would best complement the user's company.
-  - Think about what the user's company NEEDS most: customers, suppliers, collaborators, investors, etc.
-  - Describe a company that fills that gap and shares compatible SDG/sustainability values.
+  - Describe that partner company's own profile: what they do, their sector, SDG focus, business model.
 
-Write the partner description in the same style as a real company directory listing:
-concrete, specific, mentioning what they DO, their sector, SDG focus, and business model.
-Do NOT be generic. Imagine one real company that would be a great fit.
+Write the partner_description in the same style as a real company directory listing: concrete and specific.
+Do NOT be generic. Imagine one real company.
 
 Respond ONLY with valid JSON. No explanation, no markdown.
 """
@@ -70,8 +82,9 @@ _HYDE_HUMAN = """My company:
 {user_company_desc}
 {extra}
 {filter_context}
-{partner_type_instruction}Generate a JSON response with exactly these two keys:
+{partner_type_instruction}Generate a JSON response with exactly these three keys:
 {{
+  "inferred_partner_type": "<3-6 word label for the specific company type you decided to describe, e.g. 'fitness centre', 'sports equipment retailer', 'marketing agency'>",
   "partner_description": "<50-120 word description of an ideal partner, written like a real company profile>",
   "query_expansions": ["<phrase 1>", "<phrase 2>", "<phrase 3>", "<phrase 4>", "<phrase 5>"]
 }}
@@ -90,7 +103,7 @@ def _run_hyde(
     other_requirements: str = "",
     partner_type_desc: str = "",
     filters: Optional[dict] = None,
-) -> tuple[str, list[str]]:
+) -> tuple[str, list[str], str]:
     """
     Call LLM to generate a hypothetical partner description + query expansions.
 
@@ -103,21 +116,27 @@ def _run_hyde(
                              are injected as context so HyDE stays on-topic.
 
     Returns:
-        (partner_description, query_expansions)
+        (partner_description, query_expansions, inferred_partner_type)
+        inferred_partner_type: concise label for the specific company type LLM decided
+        to describe (e.g. "fitness centre", "marketing agency"). Falls back to
+        partner_type_desc if not present.
     """
     llm = get_llm()
 
     if partner_type_desc.strip():
         partner_type_instruction = (
-            f"IMPORTANT — MODE A: The ideal partner MUST be a {partner_type_desc.strip()}.\n"
-            f"Write the partner_description as a profile of that specific type of company "
-            f"that is well-suited to serve or collaborate with MY company described above.\n"
-            f"Focus on what makes this type of company the right fit for MY industry and needs — "
-            f"do NOT describe another company like mine, and do NOT blend the two industries together.\n\n"
+            f"IMPORTANT — MODE A: The target partner is described as: '{partner_type_desc.strip()}'.\n"
+            f"If this is vague or intent-based (e.g. 'companies who need our products'), "
+            f"first infer the most specific industry/company type this maps to given MY company, "
+            f"then describe a company of that inferred type.\n"
+            f"Write the partner_description as the PARTNER'S OWN company profile — "
+            f"focus on what THEY do, their services, sector, and SDG focus.\n"
+            f"Do NOT mention my industry or describe them as 'serving my type of company' — "
+            f"that context belongs only in query_expansions, not in partner_description.\n\n"
         )
         expansion_instruction = (
             f"The query_expansions should find {partner_type_desc.strip()} companies "
-            f"that serve or work with businesses like mine (use industry-specific angles)."
+            f"that would suit businesses like mine — use industry-specific angles here."
         )
     else:
         partner_type_instruction = (
@@ -189,13 +208,13 @@ def _run_hyde(
 
         # Ensure list of strings
         expansions = [str(e).strip() for e in expansions if str(e).strip()][:5]
-        return partner_desc, expansions
+        inferred_type = data.get("inferred_partner_type", "").strip() or partner_type_desc
+        return partner_desc, expansions, inferred_type
 
     except (json.JSONDecodeError, ValueError) as e:
         logger.warning(f"HyDE JSON parse failed ({e}). Falling back to raw text.")
-        # Graceful fallback: use raw response as the description, no expansions
         fallback_desc = raw[:500] if raw else user_company_desc
-        return fallback_desc, []
+        return fallback_desc, [], partner_type_desc
 
 
 # ---------------------------------------------------------------------------
@@ -253,8 +272,219 @@ def _averaged_embedding(texts: list[str]) -> list[float]:
 
 
 # ---------------------------------------------------------------------------
-# SearchAgent LangGraph node
+# LLM-as-Judge + Reflection
 # ---------------------------------------------------------------------------
+
+_JUDGE_SYSTEM = """\
+You are a B2B partner matching quality evaluator for SDGZero, a sustainability directory.
+
+Your job is to evaluate a list of candidate companies and determine whether each one is a
+good match for the user's requirements. You also reflect on WHY the search went wrong
+(if it did), so the next search attempt can avoid the same mistake.
+
+Respond ONLY with valid JSON. No explanation, no markdown.
+"""
+
+_JUDGE_HUMAN = """\
+User's company:
+{user_company_desc}
+
+Target partner type: {partner_type_desc}
+(If empty, evaluate purely on business complementarity with the user's company.)
+
+Candidate companies (evaluate each):
+{candidates_json}
+
+For each candidate, score on TWO dimensions:
+  type_score (0-2): Does it match the target partner type?
+    0 = clearly wrong type
+    1 = possibly relevant but uncertain
+    2 = clearly the right type
+  fit_score (0-2): Does it complement the user's company business?
+    0 = no relevance
+    1 = some relevance
+    2 = highly complementary
+
+Also write a one-sentence reflection explaining WHY the overall search results are
+poor (if they are), focusing on what caused the mismatch — e.g. embedding drift,
+wrong vocabulary, HyDE mixing two industries, etc.
+If results are good overall, set reflection to an empty string.
+
+Respond with exactly this JSON structure:
+{{
+  "judgments": [
+    {{"id": "<company id>", "type_score": 0-2, "fit_score": 0-2}}
+  ],
+  "reflection": "<one sentence explaining the failure cause, or empty string>"
+}}
+"""
+
+_MIN_GOOD = 5        # minimum good candidates before triggering retry
+_GOOD_THRESHOLD = 3  # minimum total score (type*2 + fit) to be "good"
+
+
+def _judge_and_reflect(
+    candidates: list[dict],
+    user_company_desc: str,
+    partner_type_desc: str,
+) -> tuple[list[str], list[str], str]:
+    """
+    LLM-as-Judge: evaluate each candidate and reflect on search quality.
+
+    One LLM call evaluates all candidates simultaneously and produces:
+      - good_ids:   company IDs that pass the quality threshold
+      - bad_ids:    company IDs that fail
+      - reflection: one-sentence explanation of why results are poor (or "")
+
+    Scoring logic:
+      With partner_type: good = type_score >= 1 AND (type_score*2 + fit_score) >= THRESHOLD
+      Without partner_type: good = fit_score >= 1
+
+    Args:
+        candidates:        list of candidate company dicts from search
+        user_company_desc: user's own company description
+        partner_type_desc: target partner type (may be empty)
+
+    Returns:
+        (good_ids, bad_ids, reflection)
+    """
+    llm = get_llm()
+
+    # Compact representation to stay within token limits
+    candidates_summary = [
+        {
+            "id": c.get("id", c.get("slug", "")),
+            "name": c.get("name", ""),
+            "categories": c.get("categories", ""),
+            "description": (c.get("document") or "")[:200],
+        }
+        for c in candidates
+    ]
+
+    from langchain_core.messages import SystemMessage, HumanMessage
+    prompt = _JUDGE_HUMAN.format(
+        user_company_desc=user_company_desc,
+        partner_type_desc=partner_type_desc or "(not specified — focus on business fit)",
+        candidates_json=json.dumps(candidates_summary, ensure_ascii=False, indent=2),
+    )
+    messages = [SystemMessage(content=_JUDGE_SYSTEM), HumanMessage(content=prompt)]
+
+    try:
+        response = llm.invoke(messages)
+        raw = response.content.strip()
+        raw = re.sub(r"^```(?:json)?\s*", "", raw)
+        raw = re.sub(r"\s*```$", "", raw)
+        data = json.loads(raw)
+    except Exception as e:
+        logger.warning(f"SearchAgent judge: LLM call failed ({e}) — skipping reflection")
+        all_ids = [c.get("id", c.get("slug", "")) for c in candidates]
+        return all_ids, [], ""
+
+    judgments = {j["id"]: j for j in data.get("judgments", [])}
+    reflection = data.get("reflection", "").strip()
+
+    good_ids, bad_ids = [], []
+    for c in candidates:
+        cid = c.get("id", c.get("slug", ""))
+        j = judgments.get(cid)
+        if j is None:
+            good_ids.append(cid)  # unknown → assume ok
+            continue
+
+        type_score = int(j.get("type_score", 0))
+        fit_score = int(j.get("fit_score", 0))
+
+        if partner_type_desc.strip():
+            # Strict: must clearly match the target type (score=2), not just "possibly"
+            # type_score=1 ("possibly relevant") allows wrong-industry companies through
+            is_good = type_score >= 2
+        else:
+            is_good = fit_score >= 1
+
+        (good_ids if is_good else bad_ids).append(cid)
+
+    logger.info(
+        f"SearchAgent judge: {len(good_ids)} good, {len(bad_ids)} bad. "
+        f"reflection={'yes' if reflection else 'none'}"
+    )
+    if reflection:
+        logger.info(f"SearchAgent reflection: {reflection}")
+
+    return good_ids, bad_ids, reflection
+
+
+def _selective_retry(
+    candidates: list[dict],
+    good_ids: set,
+    reflection: str,
+    partner_type_desc: str,
+    user_company_desc: str,
+    filters: dict,
+    avg_embedding: list[float],
+) -> tuple[list[dict], str]:
+    """
+    CRAG selective retry: keep good candidates, search for replacements for bad ones.
+
+    Strategy:
+      1. Keep all good candidates as-is
+      2. Re-run HyDE with reflection injected → new embedding
+      3. Search for (10 - len(good)) additional candidates
+      4. Deduplicate against all previously seen IDs
+      5. Return (good + new, retry_desc) so caller can update hypothetical_partner_desc
+
+    Args:
+        candidates:        original candidate list
+        good_ids:          IDs of candidates that passed judge
+        reflection:        one-sentence failure reason from judge
+        partner_type_desc: target partner type
+        user_company_desc: user's company description
+        filters:           current search filters
+        avg_embedding:     original search embedding (fallback)
+
+    Returns:
+        (new_candidates, retry_desc) — candidates with good originals + fresh replacements,
+        and the updated HyDE description to use as hypothetical_partner_desc for scoring.
+    """
+    good_candidates = [c for c in candidates if c.get("id", c.get("slug")) in good_ids]
+    seen_ids = {c.get("id", c.get("slug", "")) for c in candidates}
+    need = max(10 - len(good_candidates), 3)
+
+    logger.info(
+        f"SearchAgent retry: keeping {len(good_candidates)} good, "
+        f"searching {need} replacements. reflection='{reflection[:80]}...'"
+    )
+
+    # Re-run HyDE with reflection injected as memory
+    reflection_hint = (
+        f"\n\nIMPORTANT — previous search failed. Reason: {reflection}\n"
+        f"Adjust your description to avoid repeating this mistake.\n"
+        if reflection else ""
+    )
+
+    retry_desc = ""
+    try:
+        retry_desc, _, _retry_inferred = _run_hyde(
+            user_company_desc=user_company_desc + reflection_hint,
+            partner_type_desc=partner_type_desc,
+            filters=filters,
+        )
+        logger.info(f"SearchAgent retry: HyDE → {retry_desc[:150]}")
+        # Anchor embedding toward partner type (same strategy as primary search)
+        if partner_type_desc.strip():
+            retry_texts = [partner_type_desc, partner_type_desc, retry_desc]
+        else:
+            retry_texts = [retry_desc]
+        retry_embedding = _averaged_embedding(retry_texts)
+    except Exception as e:
+        logger.warning(f"SearchAgent retry: HyDE failed ({e}), reusing original embedding")
+        retry_embedding = avg_embedding
+
+    # Search for new candidates, excluding already-seen IDs
+    raw_new = semantic_search_from_embedding(retry_embedding, n_results=need + len(seen_ids))
+    new_candidates = [c for c in raw_new if c.get("id", c.get("slug", "")) not in seen_ids][:need]
+
+    logger.info(f"SearchAgent retry: found {len(new_candidates)} fresh replacements")
+    return good_candidates + new_candidates, retry_desc
 
 def search_agent_node(state: AgentState) -> dict:
     """
@@ -296,28 +526,25 @@ def search_agent_node(state: AgentState) -> dict:
 
     if has_desc:
         logger.info("SearchAgent: running HyDE...")
-        partner_desc, expansions = _run_hyde(user_desc, other_req, partner_type, filters)
+        partner_desc, expansions, inferred_type = _run_hyde(user_desc, other_req, partner_type, filters)
         logger.info(f"SearchAgent: HyDE done. expansions={len(expansions)}")
         logger.info(f"SearchAgent: HyDE content → {partner_desc[:200]}")
+        if inferred_type and inferred_type != partner_type:
+            logger.info(f"SearchAgent: inferred partner type → '{inferred_type}'")
 
         # ------------------------------------------------------------------
         # Step 1b: Embed — build search vector
         #
-        # When partner_type_desc is explicit, include the raw partner_type
-        # text alongside the HyDE description. This anchors the embedding
-        # toward the correct company TYPE (e.g. "media company") so that
-        # industry vocabulary in HyDE ("beauty", "skincare") doesn't dominate
-        # and pull results toward the wrong sector.
-        # Repeat the raw type 2x to give it stronger weight vs HyDE.
-        #
-        # When no partner_type is given, average HyDE + expansions to broaden
-        # recall across multiple search angles.
+        # Use inferred_type (the specific label HyDE resolved to) as the
+        # anchor instead of the raw partner_type_desc, which may be vague
+        # (e.g. "companies who may need our products"). inferred_type is
+        # always a concrete label ("fitness centre", "marketing agency").
+        # Repeat x2 to give it stronger weight vs HyDE.
         # ------------------------------------------------------------------
-        if partner_type:
-            all_texts = [partner_type, partner_type, partner_desc]
+        if inferred_type:
+            all_texts = [inferred_type, inferred_type, partner_desc]
             logger.info(
-                "SearchAgent: partner_type provided — "
-                "anchoring embedding with raw type (x2) + HyDE description"
+                f"SearchAgent: anchoring embedding with inferred_type='{inferred_type}' (x2) + HyDE"
             )
         else:
             all_texts = [partner_desc] + expansions
@@ -406,6 +633,45 @@ def search_agent_node(state: AgentState) -> dict:
         # pure semantic: no filters
         candidates = semantic_search_from_embedding(avg_embedding, n_results=10)
         logger.info(f"SearchAgent: semantic_search → {len(candidates)} results")
+
+    logger.info(f"SearchAgent: initial → {len(candidates)} candidates via {method} (fallback={fallback_level})")
+
+    # ------------------------------------------------------------------
+    # Step 2: LLM-as-Judge + Reflection + CRAG selective retry
+    #
+    # Only runs when we have candidates AND a user description to judge against.
+    # Skipped when there are too few candidates to evaluate meaningfully.
+    # ------------------------------------------------------------------
+    if candidates and has_desc:
+        # Use inferred_type for judge — it's a concrete label (e.g. "fitness centre")
+        # even when the original partner_type_desc was vague ("companies who may need our products")
+        judge_type = inferred_type if has_desc else partner_type
+        good_ids, bad_ids, reflection = _judge_and_reflect(
+            candidates=candidates,
+            user_company_desc=user_desc,
+            partner_type_desc=judge_type,
+        )
+
+        if len(good_ids) < _MIN_GOOD and bad_ids:
+            # Not enough good candidates — selectively retry for replacements
+            candidates, retry_partner_desc = _selective_retry(
+                candidates=candidates,
+                good_ids=set(good_ids),
+                reflection=reflection,
+                partner_type_desc=judge_type,
+                user_company_desc=user_desc,
+                filters=filters,
+                avg_embedding=avg_embedding,
+            )
+            # Update hypothetical_partner_desc so ScoringAgent's cross-encoder
+            # uses the corrected (retry) HyDE as its query anchor, not the
+            # original beauty-biased description that caused the wrong ranking.
+            if retry_partner_desc:
+                partner_desc = retry_partner_desc
+                logger.info("SearchAgent: hypothetical_partner_desc updated to retry HyDE")
+            logger.info(f"SearchAgent: after retry → {len(candidates)} candidates")
+        else:
+            logger.info(f"SearchAgent: judge passed ({len(good_ids)}/{len(candidates)} good) — no retry needed")
 
     logger.info(f"SearchAgent: final → {len(candidates)} candidates via {method} (fallback={fallback_level})")
 

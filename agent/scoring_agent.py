@@ -50,8 +50,8 @@ _CROSS_ENCODER_MODEL = "cross-encoder/ms-marco-MiniLM-L-6-v2"
 _TOP_N = 5              # final Top-N to keep after reranking
 
 # Sigmoid thresholds for match_quality labels (see _assign_match_quality)
-_SCORE_STRONG = 0.70    # >= 70% probability → "strong"
-_SCORE_PARTIAL = 0.2    # >= 20% probability → "partial"; below → "fallback"
+_SCORE_STRONG  = 0.70   # >= 70% → "strong"
+_SCORE_PARTIAL = 0.20   # >= 20% → "partial"; below → "fallback"
 
 
 # ---------------------------------------------------------------------------
@@ -120,22 +120,19 @@ def _rerank(query: str, candidates: list[dict]) -> list[dict]:
     return scored
 
 
-def _assign_match_quality(score: float, fallback_level: int) -> str:
+def _assign_match_quality(score: float, fallback_level: int, anchor: str = "HyDE") -> str:
     """
     Derive a Result Transparency label based on cross-encoder score only.
 
-    Labels (shown in report):
+    Labels:
         strong   — score >= 70%
-        partial  — score >= 25%
-        fallback — score < 25%
-
-    Search degradation (fallback_level > 0) is shown separately in the report
-    header — it should NOT override a high individual match score.
-    e.g. a 87% score with fallback_level=1 is still "strong", not "fallback".
+        partial  — score >= 20%
+        fallback — score < 20%
 
     Args:
         score:          sigmoid cross_encoder_score in [0, 1].
         fallback_level: unused here; kept for signature compatibility.
+        anchor:         unused here; kept for signature compatibility.
 
     Returns:
         "strong" | "partial" | "fallback"
@@ -387,16 +384,22 @@ def scoring_agent_node(state: AgentState) -> dict:
     #   style for the cross-encoder to score meaningfully.
     #
     # Falls back to user_company_desc only when HyDE is absent (filter-only path).
-    hyde_desc = state.get("hypothetical_partner_desc", "")
-    # Always use HyDE as cross-encoder anchor — it's passage-format text that
-    # ms-marco can score properly. Raw partner_type_desc / user_company_desc are
-    # casual short phrases → scores near 0. HyDE already incorporates both.
-    # Falls back to user_desc only on filter-only path (no HyDE generated).
-    query = hyde_desc.strip() or user_desc.strip()
+    hyde_desc    = state.get("hypothetical_partner_desc", "")
+    partner_type = state.get("partner_type_desc", "")
+
+    # Cross-encoder query anchor:
+    #   HyDE (passage-format description of the ideal partner) → ms-marco scores 0.80-0.96
+    #   Falls back to user_desc only on filter-only path (no HyDE generated).
+    if hyde_desc.strip():
+        query  = hyde_desc.strip()
+        anchor = "HyDE"
+    else:
+        query  = user_desc.strip()
+        anchor = "user_desc"
 
     if query:
-        anchor = "HyDE" if hyde_desc.strip() else "user_desc"
         logger.info(f"ScoringAgent: query anchor = {anchor} ({len(query)} chars)")
+        logger.info(f"ScoringAgent: query preview → {query[:200]}")
     if not query:
         # No text anchor at all — skip reranking, use bi-encoder order
         logger.warning("ScoringAgent: no query text — skipping cross-encoder, using bi-encoder order")
@@ -427,7 +430,7 @@ def scoring_agent_node(state: AgentState) -> dict:
     # ------------------------------------------------------------------
     for company in top5:
         company["match_quality"]   = _assign_match_quality(
-            company["cross_encoder_score"], fallback_lvl
+            company["cross_encoder_score"], fallback_lvl, anchor
         )
         company["soft_filter_hit"] = _check_soft_filters(company, soft_filters)
 
