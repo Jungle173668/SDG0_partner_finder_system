@@ -59,6 +59,11 @@ MODE A — Target type specified (e.g. "media company", "logistics provider"):
       → e.g. user = sports nutrition company, target = "companies who may need our products"
         → infer: gyms, fitness centres, sports clubs, sports retailers, athletic training facilities
         → describe ONE of those inferred types
+      → IMPORTANT: infer narrowly and specifically. Do NOT infer broadly (e.g. "any company with employees").
+        If the user's product/service is niche, the target should also be niche.
+      → Ambiguous words in user_company_desc: interpret them in context of the primary business.
+        e.g. "sports nutrition and caring company" → "caring" = health/wellness care, NOT car care or industrial care.
+        e.g. "food and beverage company" → partners = restaurants, retailers, caterers — NOT generic "any business".
   - If the target type is EXPLICIT ("gym", "media company", "logistics provider"):
       → describe a company of that exact type directly
   - In both cases: describe what the PARTNER does — their services, sector, SDG alignment, business model.
@@ -126,7 +131,15 @@ def _run_hyde(
     if partner_type_desc.strip():
         partner_type_instruction = (
             f"IMPORTANT — MODE A: The target partner is described as: '{partner_type_desc.strip()}'.\n"
-            f"If this is vague or intent-based (e.g. 'companies who need our products'), "
+            f"CRITICAL: First check whether the description STARTS WITH an explicit company type name "
+            f"(e.g. 'Accountants', 'Law firms', 'Marketing agencies', 'Logistics providers', 'Banks', 'Consultants'). "
+            f"If it does — even if followed by intent context like 'help us with X' or 'who can do Y' — "
+            f"treat the named type as EXPLICIT and describe a company of THAT exact type. "
+            f"Do NOT blend my industry with the intent to infer a hybrid third type. "
+            f"Example: 'Accountants or law companies help us deal with risks' → describe an accountancy or law firm, "
+            f"NOT a 'construction risk management firm'.\n"
+            f"If the description does NOT start with an explicit company type name and is vague or intent-based "
+            f"(e.g. 'companies who need our products', 'potential customers'), "
             f"first infer the most specific industry/company type this maps to given MY company, "
             f"then describe a company of that inferred type.\n"
             f"Write the partner_description as the PARTNER'S OWN company profile — "
@@ -143,7 +156,9 @@ def _run_hyde(
             f"MODE B: No specific partner type was given. "
             f"Based on my company description, identify the most valuable type of partner I need "
             f"(e.g. a distributor, marketing agency, technology provider, investor, etc.) "
-            f"and describe a company that fills that gap while sharing compatible sustainability values.\n\n"
+            f"and describe a company that fills that gap while sharing compatible sustainability values.\n"
+            f"IMPORTANT: prefer a partner from a DIFFERENT industry/sector than my own company, "
+            f"unless the additional requirements below explicitly ask for peers or collaborators in the same space.\n\n"
         )
         expansion_instruction = (
             "The query_expansions should cover different angles: "
@@ -170,11 +185,14 @@ def _run_hyde(
         if filter_hints else ""
     )
 
-    # other_requirements intentionally excluded from HyDE:
-    # it is a soft preference ("cares about nature") that should not steer the
-    # vector search direction — only partner_type_desc and filters do that.
-    # It is used in reasoning (scoring_agent) to inform the recommendation text.
-    extra = ""
+    # Include other_requirements in HyDE context so exclusions and preferences
+    # (e.g. "exclude skin-care", "prefer health sector") steer the generated
+    # partner description and query expansions.
+    extra = (
+        f"\nAdditional requirements for the ideal partner: {other_requirements.strip()}\n"
+        if other_requirements and other_requirements.strip()
+        else ""
+    )
     prompt = _HYDE_HUMAN.format(
         user_company_desc=user_company_desc,
         partner_type_instruction=partner_type_instruction,
@@ -479,8 +497,21 @@ def _selective_retry(
         logger.warning(f"SearchAgent retry: HyDE failed ({e}), reusing original embedding")
         retry_embedding = avg_embedding
 
-    # Search for new candidates, excluding already-seen IDs
-    raw_new = semantic_search_from_embedding(retry_embedding, n_results=need + len(seen_ids))
+    # Search for new candidates, excluding already-seen IDs.
+    # If hard filters exist (e.g. city=London), use hybrid_search to respect them.
+    # Fall back to pure semantic only when hybrid returns fewer than needed.
+    strict_filters = {k: v for k, v in filters.items() if k in ("city", "business_type", "job_sector", "company_size", "claimed")}
+    if strict_filters:
+        raw_new = hybrid_search(retry_embedding, strict_filters, n_results=need + len(seen_ids))
+        logger.info(f"SearchAgent retry: hybrid with strict_filters={list(strict_filters.keys())} → {len(raw_new)} raw")
+        if len(raw_new) < need:
+            # Not enough filtered results — supplement with semantic (deduped)
+            semantic_extra = semantic_search_from_embedding(retry_embedding, n_results=need + len(seen_ids))
+            seen_after_hybrid = seen_ids | {c.get("id", c.get("slug", "")) for c in raw_new}
+            semantic_extra = [c for c in semantic_extra if c.get("id", c.get("slug", "")) not in seen_after_hybrid]
+            raw_new = raw_new + semantic_extra
+    else:
+        raw_new = semantic_search_from_embedding(retry_embedding, n_results=need + len(seen_ids))
     new_candidates = [c for c in raw_new if c.get("id", c.get("slug", "")) not in seen_ids][:need]
 
     logger.info(f"SearchAgent retry: found {len(new_candidates)} fresh replacements")

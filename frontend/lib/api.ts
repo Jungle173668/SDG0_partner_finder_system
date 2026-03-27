@@ -14,6 +14,7 @@ export interface SearchRequest {
   user_company_desc: string;
   partner_type_desc?: string;
   other_requirements?: string;
+  parent_id?: string;
   city?: FilterEntry;
   business_type?: FilterEntry;
   job_sector?: FilterEntry;
@@ -87,6 +88,49 @@ export async function pollStatus(sessionId: string): Promise<StatusResponse> {
 export async function getSchema(): Promise<Schema> {
   const res = await fetch(`${API_BASE}/schema`);
   if (!res.ok) throw new Error(`Schema fetch failed: ${res.status}`);
+  return res.json();
+}
+
+// ---------------------------------------------------------------------------
+// Refine
+// ---------------------------------------------------------------------------
+
+export interface CompanyFeedback {
+  name: string;
+  categories?: string;
+  sdg_tags?: string;
+  business_type?: string;
+  city?: string;
+  country?: string;
+}
+
+export interface RefineRequest {
+  liked: CompanyFeedback[];
+  disliked: CompanyFeedback[];
+  user_text: string;
+}
+
+export interface RefineResponse {
+  action: "refine" | "unclear";
+  summary: string;
+  new_search_params: SearchRequest;
+  rejected: string[];
+  modes: Record<string, "hard" | "soft">;
+}
+
+export async function refineSearch(
+  sessionId: string,
+  req: RefineRequest,
+): Promise<RefineResponse> {
+  const res = await fetch(`${API_BASE}/refine/${sessionId}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error(err.detail || `Refine failed: ${res.status}`);
+  }
   return res.json();
 }
 

@@ -80,9 +80,11 @@ if static_dir.exists():
 
 from api.routes.search import router as search_router
 from api.routes.schema import router as schema_router
+from api.routes.refine import router as refine_router
 
 app.include_router(search_router, prefix="/api")
 app.include_router(schema_router, prefix="/api")
+app.include_router(refine_router, prefix="/api")
 
 
 @app.get("/api/health")

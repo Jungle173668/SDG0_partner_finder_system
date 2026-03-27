@@ -451,7 +451,8 @@ def _render_criteria(filters: dict, fallback_lvl: int,
                      n_candidates: int, n_scored: int,
                      user_company_desc: str = "",
                      partner_type_desc: str = "",
-                     soft_filters: dict = None) -> str:
+                     soft_filters: dict = None,
+                     scored_companies: list = None) -> str:
     pills = ""
     for k, v in (filters or {}).items():
         pills += _pill_for_filter(k, v, "hard")
@@ -461,20 +462,64 @@ def _render_criteria(filters: dict, fallback_lvl: int,
     if not pills:
         pills = '<span class="pill">Semantic search only</span>'
 
-    # Specific fallback message — level 1 relaxes sdg_tags + claimed
-    fallback_tag = ""
-    if fallback_lvl == 1:
-        relaxed = []
-        if (filters or {}).get("sdg_tags"):
-            relaxed.append("SDG tags")
-        if (filters or {}).get("claimed"):
-            relaxed.append("Verified")
-        if (filters or {}).get("categories"):
-            relaxed.append("Categories")
-        relaxed_str = " & ".join(relaxed) if relaxed else "some conditions"
-        fallback_tag = f'<span class="fallback-tag">⚠ {relaxed_str} relaxed — not enough matches</span>'
-    elif fallback_lvl == 2:
-        fallback_tag = '<span class="fallback-tag">⚠ All filters dropped — semantic only</span>'
+    # Warn when a requested filter isn't satisfied in the actual results.
+    # Single check per field — no duplication. Checks both hard and soft filters.
+    warnings = []
+    f = filters or {}
+    sf = soft_filters or {}
+    companies = scored_companies or []
+
+    def _warn(msg: str):
+        warnings.append(f'<span class="fallback-tag">⚠ {msg}</span>')
+
+    def _fval(field: str):
+        """Return filter value for field from hard filters, falling back to soft."""
+        return f.get(field) or sf.get(field)
+
+    # City
+    req_city = _fval("city")
+    if req_city and companies:
+        city_str = req_city if isinstance(req_city, str) else ", ".join(req_city)
+        result_cities = {str(c.get("city", "")).strip().lower() for c in companies}
+        if city_str.lower() not in result_cities:
+            _warn(f"No companies found in {city_str} — showing nearest alternatives")
+
+    # SDG tags (checks sdg_tags + predicted_sdg_tags)
+    req_sdgs = _fval("sdg_tags")
+    if req_sdgs and companies:
+        req_set = {s.lower().strip() for s in (req_sdgs if isinstance(req_sdgs, list) else [req_sdgs])}
+        def _sdg_text(c):
+            return f"{c.get('sdg_tags', '')} {c.get('predicted_sdg_tags', '')}".lower()
+        matched = sum(1 for c in companies if any(s in _sdg_text(c) for s in req_set))
+        if matched == 0:
+            _warn("No companies with requested SDG tags found — filter was relaxed")
+        elif matched < len(companies) // 2 + 1:
+            _warn(f"Only {matched}/{len(companies)} results carry the requested SDG tags")
+
+    # Categories
+    req_cats = _fval("categories")
+    if req_cats and companies:
+        req_set = {s.lower().strip() for s in (req_cats if isinstance(req_cats, list) else [req_cats])}
+        matched = sum(1 for c in companies if any(s in str(c.get("categories", "")).lower() for s in req_set))
+        if matched == 0:
+            _warn("No companies in requested categories found — filter was relaxed")
+        elif matched < len(companies) // 2 + 1:
+            _warn(f"Only {matched}/{len(companies)} results match the requested categories")
+
+    # Claimed / verified
+    if _fval("claimed") and companies:
+        verified = sum(1 for c in companies if str(c.get("claimed", "")).lower() in ("yes", "true", "1"))
+        if verified == 0:
+            _warn("No verified profiles found — showing unverified alternatives")
+
+    # Business type
+    req_btype = _fval("business_type")
+    if req_btype and companies:
+        matched = sum(1 for c in companies if str(c.get("business_type", "")).lower() == req_btype.lower())
+        if matched == 0:
+            _warn(f"No {req_btype} companies found — filter was relaxed")
+
+    fallback_tag = "".join(warnings)
 
     desc_row = ""
     if user_company_desc.strip():
@@ -760,6 +805,7 @@ def report_agent_node(state: AgentState) -> dict:
         user_company_desc=user_desc,
         partner_type_desc=partner_type,
         soft_filters=soft_filters,
+        scored_companies=scored,
     )
 
     cards = ""

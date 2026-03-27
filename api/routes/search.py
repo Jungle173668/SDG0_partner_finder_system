@@ -38,6 +38,7 @@ class SearchRequest(BaseModel):
     user_company_desc: str = Field(..., min_length=3, description="Your company description")
     partner_type_desc: str = Field("", description="What kind of partner are you looking for")
     other_requirements: str = Field("", description="Additional free-text requirements")
+    parent_id: Optional[str] = Field(None, description="Parent session ID (for HITL refinement lineage)")
 
     # Filter fields — each has a value + hard/soft mode
     city: Optional[FilterEntry] = None
@@ -137,6 +138,7 @@ def _run_pipeline_background(session_id: str, req: SearchRequest) -> None:
             "filters": hard_filters,
             "soft_filters": soft_filters,
             "other_requirements": req.other_requirements,
+            "parent_id": req.parent_id,
             "scored_companies": state.get("scored_companies", []),
             "candidate_companies": state.get("candidate_companies", []),
             "search_fallback_level": state.get("search_fallback_level", 0),
