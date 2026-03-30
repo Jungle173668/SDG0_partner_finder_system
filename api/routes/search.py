@@ -15,7 +15,7 @@ from typing import List, Optional, Union
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 
-from api.session_store import load_session, save_session, update_session_status
+from api.session_store import load_session, save_session, update_session_status, patch_session, link_new_session
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -67,6 +67,8 @@ class StatusResponse(BaseModel):
     partner_type_desc: str = ""
     user_company_desc: str = ""
     errors: List[str] = []
+    prev_id: Optional[str] = None
+    next_id: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
@@ -146,6 +148,10 @@ def _run_pipeline_background(session_id: str, req: SearchRequest) -> None:
             "errors": state.get("errors", []),
             # report field is the HTML path/string — not serialized here
         })
+        # If this is a refined search, append to the end of the session chain
+        if req.parent_id:
+            link_new_session(req.parent_id, session_id)
+
         logger.info(f"Pipeline done — session={session_id}")
 
     except Exception as e:
@@ -207,6 +213,8 @@ def get_search_status(session_id: str):
         partner_type_desc=session.get("partner_type_desc", ""),
         user_company_desc=session.get("user_company_desc", ""),
         errors=session.get("errors", []),
+        prev_id=session.get("prev_id"),
+        next_id=session.get("next_id"),
     )
 
 

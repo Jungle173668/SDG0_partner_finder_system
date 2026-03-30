@@ -191,6 +191,22 @@ function DoneView({
           <span className="font-mono text-teal font-bold text-sm">{id}</span>
         </div>
         <div className="ml-auto flex gap-2">
+          {status.prev_id && (
+            <button
+              onClick={() => onNavigate(status.prev_id!)}
+              className="text-xs bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg transition-colors"
+            >
+              ← Previous
+            </button>
+          )}
+          {status.next_id && (
+            <button
+              onClick={() => onNavigate(status.next_id!)}
+              className="text-xs bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg transition-colors"
+            >
+              Next →
+            </button>
+          )}
           <button
             onClick={() => pageUrl && navigator.clipboard.writeText(pageUrl)}
             className="text-xs bg-white/10 hover:bg-white/20 text-white px-3 py-1.5 rounded-lg transition-colors"

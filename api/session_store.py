@@ -102,6 +102,50 @@ def session_exists(session_id: str) -> bool:
     return (_sessions_dir() / f"{session_id}.json").exists()
 
 
+def patch_session(session_id: str, fields: dict) -> None:
+    """Patch specific fields of an existing session without rewriting the whole file."""
+    path = _sessions_dir() / f"{session_id}.json"
+    if not path.exists():
+        return
+    with open(path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+    data.update(fields)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, default=str)
+
+
+def link_new_session(parent_id: str, new_id: str) -> None:
+    """
+    Append new_id to the end of the chronological chain starting from parent_id.
+
+    Follows next_id pointers from parent_id to find the current tail, then:
+      tail.next_id = new_id
+      new_id.prev_id = tail
+
+    This means no matter which page the user refines from, new sessions always
+    append in time order: A ↔ B ↔ C ↔ D regardless of refinement origin.
+    """
+    # Walk forward from parent to find the current tail (max 50 hops, safety limit)
+    tail_id = parent_id
+    visited = set()
+    for _ in range(50):
+        if tail_id in visited:
+            break
+        visited.add(tail_id)
+        tail_data = load_session(tail_id)
+        if tail_data is None:
+            break
+        nxt = tail_data.get("next_id")
+        if not nxt:
+            break
+        tail_id = nxt
+
+    # Link tail → new_id and new_id → tail
+    patch_session(tail_id, {"next_id": new_id})
+    patch_session(new_id, {"prev_id": tail_id})
+    logger.info(f"session_store: linked chain tail={tail_id} → new={new_id}")
+
+
 def update_session_status(session_id: str, status: str, error: Optional[str] = None) -> None:
     """
     Update the status field of an existing session.

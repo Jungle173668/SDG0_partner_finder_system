@@ -52,6 +52,8 @@ export interface StatusResponse {
   partner_type_desc?: string;
   user_company_desc?: string;
   errors?: string[];
+  prev_id?: string;
+  next_id?: string;
 }
 
 export interface Schema {

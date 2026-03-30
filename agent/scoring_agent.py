@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import re
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from functools import lru_cache
 
 import numpy as np
@@ -441,15 +442,14 @@ def scoring_agent_node(state: AgentState) -> dict:
     #   DB text (always) + Tavily web content (when available)
     # This gives LLM richer context for specific, well-grounded reasoning.
     # ------------------------------------------------------------------
-    logger.info(f"ScoringAgent: generating reasoning for {len(top5)} companies...")
+    logger.info(f"ScoringAgent: generating reasoning for {len(top5)} companies (parallel)...")
 
-    scored_companies = []
-    for i, company in enumerate(top5):
+    def _reason_one(args):
+        i, company = args
         slug             = company.get("slug") or company.get("id", "unknown")
         research_entry   = research.get(slug, {})
         research_summary = research_entry.get("summary", "")
         source           = research_entry.get("source", "db")
-
         try:
             reasoning = _run_reasoning(
                 user_company_desc=user_desc,
@@ -468,11 +468,16 @@ def scoring_agent_node(state: AgentState) -> dict:
             logger.error(f"ScoringAgent: reasoning failed for {slug!r}: {e}")
             errors.append(f"ScoringAgent: reasoning error for {slug} — {e}")
             reasoning = ""
+        return i, {**company, "reasoning": reasoning}
 
-        scored_companies.append({
-            **company,
-            "reasoning": reasoning,
-        })
+    results_map: dict[int, dict] = {}
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        futures = {pool.submit(_reason_one, (i, c)): i for i, c in enumerate(top5)}
+        for future in as_completed(futures):
+            idx, scored = future.result()
+            results_map[idx] = scored
+
+    scored_companies = [results_map[i] for i in range(len(top5))]
 
     # Log quality distribution summary
     quality_dist = {q: sum(1 for c in scored_companies if c["match_quality"] == q)
