@@ -88,6 +88,9 @@ export default function FilterRow({ label, fieldName, options, multi = false, fo
         <span className="text-[10px] text-gray-400 text-center leading-tight">
           {mode === "hard" ? "strict" : "bonus"}
         </span>
+        <span className={`text-[9px] text-gray-300 text-center leading-tight max-w-[52px] ${mode === "hard" ? "" : "invisible"}`}>
+          may limit results
+        </span>
       </div>
     </div>
   );

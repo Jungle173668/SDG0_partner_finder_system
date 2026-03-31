@@ -134,6 +134,7 @@ def run_pipeline(
     soft_filters: Optional[dict] = None,
     other_requirements: str = "",
     session_id: Optional[str] = None,
+    allow_global_fallback: bool = False,
 ) -> AgentState:
     """
     Run the full Multi-Agent Pipeline and return the final state.
@@ -168,6 +169,7 @@ def run_pipeline(
         "filters": filters or {},
         "soft_filters": soft_filters or {},
         "other_requirements": other_requirements,
+        "allow_global_fallback": allow_global_fallback,
         "errors": [],
     }
 

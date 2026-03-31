@@ -184,6 +184,18 @@ function DoneView({
 
   return (
     <div className="max-w-6xl mx-auto px-4 py-8 space-y-4">
+      {/* Notices banner */}
+      {status.notices && status.notices.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-xl px-4 py-3 flex items-start gap-3 text-sm text-amber-800">
+          <span className="text-amber-500 mt-0.5 shrink-0">ⓘ</span>
+          <div className="space-y-1">
+            {status.notices.map((notice, i) => (
+              <p key={i}>{notice}</p>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Top bar */}
       <div className="bg-navy text-white rounded-2xl px-6 py-3 flex items-center gap-4">
         <div>

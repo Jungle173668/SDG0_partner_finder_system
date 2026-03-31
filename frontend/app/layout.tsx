@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "SDGZero Partner Finder",
+  title: "SDG: Zero Partner Finder",
   description: "AI-powered sustainability business partner matching",
 };
 
@@ -23,12 +23,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           <div className="bg-white rounded-md px-2 py-1">
             <img
               src="/static/SDG0logo.png"
-              alt="SDGZero"
+              alt="SDG: Zero"
               className="h-6 object-contain"
             />
           </div>
           <span className="text-lg font-bold tracking-wide">Partner Finder</span>
-          <span className="ml-auto text-xs text-white/50">AI-powered · SDGZero</span>
+          <span className="ml-auto text-xs text-white/50">AI-powered · SDG: Zero</span>
         </header>
         <main>{children}</main>
       </body>

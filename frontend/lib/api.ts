@@ -15,6 +15,7 @@ export interface SearchRequest {
   partner_type_desc?: string;
   other_requirements?: string;
   parent_id?: string;
+  allow_global_fallback?: boolean;
   city?: FilterEntry;
   business_type?: FilterEntry;
   job_sector?: FilterEntry;
@@ -52,6 +53,7 @@ export interface StatusResponse {
   partner_type_desc?: string;
   user_company_desc?: string;
   errors?: string[];
+  notices?: string[];
   prev_id?: string;
   next_id?: string;
 }

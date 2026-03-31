@@ -602,6 +602,7 @@ def search_agent_node(state: AgentState) -> dict:
     candidates = []
     method = "semantic"
     fallback_level = 0
+    _dead_zone_notice = ""
 
     def _pad_with_semantic(existing: list, target: int) -> list:
         """
@@ -701,15 +702,63 @@ def search_agent_node(state: AgentState) -> dict:
                 partner_desc = retry_partner_desc
                 logger.info("SearchAgent: hypothetical_partner_desc updated to retry HyDE")
             logger.info(f"SearchAgent: after retry → {len(candidates)} candidates")
+
+            # ------------------------------------------------------------------
+            # SQL quality dead zone escape
+            #
+            # Problem: hard filters (city/business_type/...) may return enough
+            # results to skip the 3-level fallback, but all candidates are
+            # semantically poor. After one CRAG retry (still within the same
+            # filtered pool), quality may still be bad — we never see globally
+            # better matches outside the filter.
+            #
+            # Fix: run Judge once more after retry. If still poor AND hard
+            # filters were active, do a final unconstrained semantic search.
+            # Always keep good candidates; replace bad ones with global results.
+            # ------------------------------------------------------------------
+            hard_filter_keys = {"city", "business_type", "job_sector", "company_size"}
+            had_hard_filters = any(k in filters for k in hard_filter_keys)
+            if had_hard_filters and state.get("allow_global_fallback", False):
+                good_ids_2, bad_ids_2, _ = _judge_and_reflect(candidates, user_desc, judge_type)
+                if len(good_ids_2) < _MIN_GOOD and bad_ids_2:
+                    logger.info(
+                        f"SearchAgent: quality still poor after retry "
+                        f"({len(good_ids_2)}/{len(candidates)} good) — escaping hard filters"
+                    )
+                    good_candidates = [
+                        c for c in candidates
+                        if c.get("id", c.get("slug", "")) in set(good_ids_2)
+                    ]
+                    seen_ids = {c.get("id", c.get("slug", "")) for c in candidates}
+                    need = max(10 - len(good_candidates), 0)
+                    global_results = semantic_search_from_embedding(
+                        avg_embedding, n_results=need + len(seen_ids)
+                    )
+                    fresh = [
+                        c for c in global_results
+                        if c.get("id", c.get("slug", "")) not in seen_ids
+                    ][:need]
+                    candidates = good_candidates + fresh
+                    logger.info(
+                        f"SearchAgent: dead zone escape — kept {len(good_candidates)} good, "
+                        f"added {len(fresh)} unconstrained results"
+                    )
+                    _dead_zone_notice = (
+                        "No strong matches found within your selected filters. "
+                        "Search has been expanded globally to find the best available partners."
+                    )
         else:
             logger.info(f"SearchAgent: judge passed ({len(good_ids)}/{len(candidates)} good) — no retry needed")
 
     logger.info(f"SearchAgent: final → {len(candidates)} candidates via {method} (fallback={fallback_level})")
 
-    return {
+    result: dict = {
         "hypothetical_partner_desc": partner_desc,
         "query_expansions": expansions,
         "candidate_companies": candidates,
         "search_method": method,
         "search_fallback_level": fallback_level,
     }
+    if _dead_zone_notice:
+        result["notices"] = (state.get("notices") or []) + [_dead_zone_notice]
+    return result

@@ -64,6 +64,7 @@ export default function SearchForm() {
   // Filter states keyed by field name
   const [filters, setFilters] = useState<Record<string, FilterState>>({});
   const [showAdvanced, setShowAdvanced] = useState(false);
+  const [allowGlobalFallback, setAllowGlobalFallback] = useState(false);
 
   useEffect(() => {
     getSchema()
@@ -94,6 +95,7 @@ export default function SearchForm() {
         user_company_desc: userDesc,
         partner_type_desc: partnerDesc,
         other_requirements: otherReq,
+        allow_global_fallback: allowGlobalFallback,
       };
 
       for (const [field, state] of Object.entries(filters)) {
@@ -121,7 +123,7 @@ export default function SearchForm() {
         <h1 className="text-3xl font-bold text-navy mb-1">Find Your Partner</h1>
         <p className="text-gray-500 text-sm">
           Describe your company and set filters. Our AI pipeline finds the best-matching
-          sustainability partners from the SDGZero directory.
+          sustainability partners from the SDG: Zero directory.
         </p>
       </div>
 
@@ -307,6 +309,19 @@ export default function SearchForm() {
           {error}
         </div>
       )}
+
+      {/* Global fallback opt-in */}
+      <label className="flex items-center gap-2 cursor-pointer select-none w-fit ml-auto">
+        <input
+          type="checkbox"
+          checked={allowGlobalFallback}
+          onChange={(e) => setAllowGlobalFallback(e.target.checked)}
+          className="w-3.5 h-3.5 accent-teal"
+        />
+        <span className="text-xs text-gray-400">
+          Expand search beyond filters if no strong matches found
+        </span>
+      </label>
 
       {/* Submit */}
       <div className="flex justify-end">

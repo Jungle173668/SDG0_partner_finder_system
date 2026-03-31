@@ -160,3 +160,13 @@ class AgentState(TypedDict, total=False):
 
     errors: list[str]
     """Non-fatal errors encountered during the run (e.g. Tavily timeout for one company)."""
+
+    notices: list[str]
+    """Informational messages for the user (e.g. search was expanded beyond original filters)."""
+
+    allow_global_fallback: bool
+    """
+    User opt-in: if True, SearchAgent may escape hard filters (city/business_type/...)
+    after CRAG retry still yields poor quality results, and supplement with unconstrained
+    global semantic search.
+    """

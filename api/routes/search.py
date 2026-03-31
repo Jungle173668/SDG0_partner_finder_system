@@ -40,6 +40,8 @@ class SearchRequest(BaseModel):
     other_requirements: str = Field("", description="Additional free-text requirements")
     parent_id: Optional[str] = Field(None, description="Parent session ID (for HITL refinement lineage)")
 
+    allow_global_fallback: bool = Field(False, description="Expand search beyond hard filters if no good results found")
+
     # Filter fields — each has a value + hard/soft mode
     city: Optional[FilterEntry] = None
     business_type: Optional[FilterEntry] = None
@@ -67,6 +69,7 @@ class StatusResponse(BaseModel):
     partner_type_desc: str = ""
     user_company_desc: str = ""
     errors: List[str] = []
+    notices: List[str] = []
     prev_id: Optional[str] = None
     next_id: Optional[str] = None
 
@@ -129,6 +132,7 @@ def _run_pipeline_background(session_id: str, req: SearchRequest) -> None:
             soft_filters=soft_filters,
             other_requirements=req.other_requirements,
             session_id=session_id,
+            allow_global_fallback=req.allow_global_fallback,
         )
 
         # Persist full state as JSON
@@ -146,6 +150,7 @@ def _run_pipeline_background(session_id: str, req: SearchRequest) -> None:
             "search_fallback_level": state.get("search_fallback_level", 0),
             "search_method": state.get("search_method", ""),
             "errors": state.get("errors", []),
+            "notices": state.get("notices", []),
             # report field is the HTML path/string — not serialized here
         })
         # If this is a refined search, append to the end of the session chain
@@ -213,6 +218,7 @@ def get_search_status(session_id: str):
         partner_type_desc=session.get("partner_type_desc", ""),
         user_company_desc=session.get("user_company_desc", ""),
         errors=session.get("errors", []),
+        notices=session.get("notices", []),
         prev_id=session.get("prev_id"),
         next_id=session.get("next_id"),
     )
