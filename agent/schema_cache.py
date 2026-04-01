@@ -30,20 +30,6 @@ from typing import Optional
 
 logger = logging.getLogger(__name__)
 
-# business_type: DB stores verbose form, expose short form to callers
-_BTYPE_DISPLAY = {
-    "Business2Business (B2B)": "B2B",
-    "Business2Consumer (B2C)": "B2C",
-    "Both": "Both",
-}
-
-# job_sector: DB stores "Private Sector" etc., normalise for display
-_SECTOR_DISPLAY = {
-    "Private Sector": "Private",
-    "Public Sector":  "Public",
-    "Agencies":       "Agencies",
-}
-
 _CACHE_FILE = Path(os.getenv("SCHEMA_CACHE_FILE", "./schema_cache.json"))
 _CACHE_TTL_DAYS = int(os.getenv("SCHEMA_CACHE_TTL_DAYS", "7"))
 
@@ -80,66 +66,13 @@ def _save_to_disk(schema: dict) -> None:
 
 
 def _build_from_db() -> dict:
-    """Query ChromaDB metadata directly — no embedding model needed."""
-    os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
-    import chromadb
-    from chromadb.config import Settings
-
-    chroma_dir = os.getenv("CHROMA_DIR", "./chroma_db")
-    client = chromadb.PersistentClient(
-        path=chroma_dir,
-        settings=Settings(anonymized_telemetry=False),
-    )
-    collection = client.get_collection("sdgzero_businesses")
-    raw = collection.get(include=["metadatas"], limit=10000)
-    metas = raw["metadatas"]
-    logger.info(f"Schema: read {len(metas)} records from ChromaDB at '{chroma_dir}'")
-
-    # Scalar fields
-    cities = sorted({m.get("city", "") for m in metas if m.get("city", "").strip()})
-
-    business_types_raw = sorted(
-        {m.get("business_type", "") for m in metas if m.get("business_type", "").strip()}
-    )
-    business_types = [_BTYPE_DISPLAY.get(b, b) for b in business_types_raw]
-
-    job_sectors_raw = sorted(
-        {m.get("job_sector", "") for m in metas if m.get("job_sector", "").strip()}
-    )
-    job_sectors = [_SECTOR_DISPLAY.get(s, s) for s in job_sectors_raw]
-
-    company_sizes = sorted(
-        {m.get("company_size", "") for m in metas if m.get("company_size", "").strip()}
-    )
-
-    # Multi-value comma-separated fields
-    categories: set = set()
-    for m in metas:
-        for c in (m.get("categories", "") or "").split(","):
-            c = c.strip()
-            if c:
-                categories.add(c)
-
-    sdg_tags: set = set()
-    for m in metas:
-        for field in ("sdg_tags", "predicted_sdg_tags"):
-            for tag in (m.get(field, "") or "").split(","):
-                tag = tag.strip()
-                if tag:
-                    sdg_tags.add(tag)
-
-    schema = {
-        "city": cities,
-        "business_type": business_types,
-        "job_sector": job_sectors,
-        "company_size": company_sizes,
-        "categories": sorted(categories),
-        "sdg_tags": sorted(sdg_tags),
-    }
-
+    """Query PostgreSQL directly — replaces ChromaDB metadata scan."""
+    from db.pg_store import PGStore
+    store = PGStore()
+    schema = store.build_schema_data()
     logger.info(
-        f"Schema built — cities={len(cities)}, categories={len(schema['categories'])}, "
-        f"sdg_tags={len(schema['sdg_tags'])}"
+        f"Schema built from PostgreSQL — cities={len(schema['city'])}, "
+        f"categories={len(schema['categories'])}, sdg_tags={len(schema['sdg_tags'])}"
     )
     return schema
 

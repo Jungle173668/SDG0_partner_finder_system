@@ -1,0 +1,35 @@
+version: "3.9"
+
+# ---------------------------------------------------------------------------
+# SDGZero — database service
+#
+# Only PostgreSQL is containerised here.
+# The FastAPI backend and Next.js frontend run locally (see README).
+#
+# Start:   docker compose up -d
+# Stop:    docker compose down
+# Reset:   docker compose down -v   (drops all data!)
+# ---------------------------------------------------------------------------
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: sdgzero_postgres
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-sdgzero}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-sdgzero}
+      POSTGRES_DB: ${POSTGRES_DB:-sdgzero}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-sdgzero} -d ${POSTGRES_DB:-sdgzero}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+    driver: local

@@ -112,6 +112,7 @@ export interface RefineRequest {
   liked: CompanyFeedback[];
   disliked: CompanyFeedback[];
   user_text: string;
+  allow_global_fallback?: boolean;
 }
 
 export interface RefineResponse {

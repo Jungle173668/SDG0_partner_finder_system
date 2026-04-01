@@ -295,6 +295,7 @@ function RefineTab({
   const [liked, setLiked]     = useState<Set<string>>(new Set());
   const [disliked, setDisliked] = useState<Set<string>>(new Set());
   const [userText, setUserText] = useState("");
+  const [allowGlobalFallback, setAllowGlobalFallback] = useState(false);
 
   const [isLoading, setIsLoading]         = useState(false);
   const [confirmation, setConfirmation]   = useState<RefineResponse | null>(null);
@@ -345,6 +346,7 @@ function RefineTab({
         liked:    Array.from(liked).map(companyToFeedback),
         disliked: Array.from(disliked).map(companyToFeedback),
         user_text: userText,
+        allow_global_fallback: allowGlobalFallback,
       });
       if (result.action === "unclear") {
         setErrorMsg(result.summary || "没有理解您的意图，请重新描述");
@@ -408,7 +410,16 @@ function RefineTab({
           rows={2}
           className="w-full text-sm text-navy placeholder-gray-400 resize-none outline-none border-none"
         />
-        <div className="flex justify-end">
+        <div className="flex items-center justify-between">
+          <label className="flex items-center gap-2 cursor-pointer select-none">
+            <input
+              type="checkbox"
+              checked={allowGlobalFallback}
+              onChange={(e) => setAllowGlobalFallback(e.target.checked)}
+              className="w-3.5 h-3.5 accent-teal"
+            />
+            <span className="text-xs text-gray-400">Expand beyond filters if no strong matches found</span>
+          </label>
           <button
             onClick={handleRefine}
             disabled={!hasSignals || isLoading}

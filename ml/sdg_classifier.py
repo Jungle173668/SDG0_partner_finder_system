@@ -198,10 +198,9 @@ SDG_KEYWORDS: dict[str, str] = {
 
 def train(
     save_path: Optional[Path] = None,
-    chroma_dir: str = "./chroma_db",
 ) -> dict:
     """
-    Train a multi-label SDG classifier using pre-computed ChromaDB embeddings.
+    Train a multi-label SDG classifier using pre-computed PostgreSQL embeddings.
 
     Strategy:
       1. Pull stored 384-dim embeddings from ChromaDB for businesses that have
@@ -220,7 +219,6 @@ def train(
 
     Args:
         save_path:  Where to save the model. Defaults to MODEL_DIR.
-        chroma_dir: Path to ChromaDB directory.
 
     Returns:
         Loaded model dict (same format as load_model()).
@@ -237,19 +235,21 @@ def train(
     X, y = [], []
 
     # ------------------------------------------------------------------
-    # Step 1: Real labeled examples — use stored ChromaDB embeddings
+    # Step 1: Real labeled examples — use stored PostgreSQL embeddings
     # No transformer call needed; embeddings are already computed.
     # ------------------------------------------------------------------
-    import os as _os
-    _os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
-    from db.chroma_store import BusinessStore
-
-    store = BusinessStore(persist_dir=chroma_dir)
-    all_data = store.collection.get(include=["embeddings", "metadatas"])
+    from db.pg_store import PGStore
+    store = PGStore()
+    with store._cursor(dict_rows=True) as cur:
+        cur.execute(
+            "SELECT embedding, sdg_tags FROM businesses "
+            "WHERE sdg_tags IS NOT NULL AND sdg_tags != ''"
+        )
+        pg_rows = list(cur.fetchall())
 
     real_count = 0
-    for emb, meta in zip(all_data["embeddings"], all_data["metadatas"]):
-        sdg_str = meta.get("sdg_tags", "").strip()
+    for row in pg_rows:
+        sdg_str = (row["sdg_tags"] or "").strip()
         if not sdg_str:
             continue
         raw_tags = [t.strip() for t in sdg_str.split(",")]
@@ -260,11 +260,11 @@ def train(
         vec = [0] * len(SDG_LABELS)
         for tag in known_tags:
             vec[label2id[tag]] = 1
-        X.append(emb)
+        X.append(list(row["embedding"]))
         y.append(vec)
         real_count += 1
 
-    print(f"Real labeled examples from ChromaDB : {real_count}")
+    print(f"Real labeled examples from PostgreSQL : {real_count}")
 
     # ------------------------------------------------------------------
     # Step 2: Synthetic examples — encode 17 SDG keyword descriptions.
@@ -487,7 +487,6 @@ SETFIT_MODEL_DIR = Path(__file__).parent / "models" / "sdg_setfit_v2"
 
 def train_setfit(
     save_path: Optional[Path] = None,
-    chroma_dir: str = "./chroma_db",
     num_iterations: int = 10,
     num_epochs: int = 1,
     batch_size: int = 16,
@@ -496,7 +495,7 @@ def train_setfit(
     Train a SetFit multi-label SDG classifier.
 
     Combines:
-      - Real labeled businesses from ChromaDB (full text + real SDG tags)
+      - Real labeled businesses from PostgreSQL (full text + real SDG tags)
       - Synthetic template sentences via get_templated_dataset()
         e.g. "This sentence is about Climate Action"
 
@@ -504,7 +503,6 @@ def train_setfit(
 
     Args:
         save_path:      Save directory. Defaults to SETFIT_MODEL_DIR.
-        chroma_dir:     Path to ChromaDB.
         num_iterations: Contrastive pairs per class (lower = faster, default 10).
         num_epochs:     Fine-tuning epochs (default 1).
         batch_size:     Batch size for contrastive training (default 16).
@@ -523,18 +521,20 @@ def train_setfit(
     n = len(SDG_LABELS)
 
     # ------------------------------------------------------------------
-    # Step 1: Real labeled data — full business text from ChromaDB
+    # Step 1: Real labeled data — full business text from PostgreSQL
     # ------------------------------------------------------------------
-    import os as _os
-    _os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
-    from db.chroma_store import BusinessStore
-
-    store = BusinessStore(persist_dir=chroma_dir)
-    all_data = store.collection.get(include=["documents", "metadatas"])
+    from db.pg_store import PGStore
+    store = PGStore()
+    with store._cursor(dict_rows=True) as cur:
+        cur.execute(
+            "SELECT document, sdg_tags FROM businesses "
+            "WHERE sdg_tags IS NOT NULL AND sdg_tags != ''"
+        )
+        pg_rows = list(cur.fetchall())
 
     real_texts, real_labels = [], []
-    for doc, meta in zip(all_data["documents"], all_data["metadatas"]):
-        sdg_str = meta.get("sdg_tags", "").strip()
+    for row in pg_rows:
+        sdg_str = (row["sdg_tags"] or "").strip()
         if not sdg_str:
             continue
         raw_tags = [t.strip() for t in sdg_str.split(",")]
@@ -544,10 +544,10 @@ def train_setfit(
         vec = [0] * n
         for tag in known_tags:
             vec[label2id[tag]] = 1
-        real_texts.append(doc)
+        real_texts.append(row["document"] or "")
         real_labels.append(vec)
 
-    print(f"Real labeled examples from ChromaDB : {len(real_texts)}")
+    print(f"Real labeled examples from PostgreSQL : {len(real_texts)}")
 
     # ------------------------------------------------------------------
     # Step 2: Synthetic template sentences via get_templated_dataset()
@@ -668,12 +668,11 @@ def predict_setfit_batch(
 
 
 def compare_models(
-    chroma_dir: str = "./chroma_db",
     threshold: float = THRESHOLD,
     n_samples: int = 8,
 ) -> dict:
     """
-    Compare LogReg vs SetFit side-by-side on all ChromaDB businesses.
+    Compare LogReg vs SetFit side-by-side on all PostgreSQL businesses.
 
     Prints:
       - Overall coverage for both models
@@ -681,7 +680,6 @@ def compare_models(
       - n_samples sampled businesses showing real tags + both predictions
 
     Args:
-        chroma_dir: Path to ChromaDB.
         threshold:  Probability threshold for both models.
         n_samples:  How many example businesses to print (half labeled, half random).
 
@@ -690,15 +688,15 @@ def compare_models(
     """
     import random
 
-    os.environ.setdefault("ANONYMIZED_TELEMETRY", "False")
-    from db.chroma_store import BusinessStore
-
-    store = BusinessStore(persist_dir=chroma_dir)
-    all_data = store.collection.get(include=["documents", "embeddings", "metadatas"])
-    ids = all_data["ids"]
-    docs = all_data["documents"]
-    embeddings = all_data["embeddings"]
-    metadatas = all_data["metadatas"]
+    from db.pg_store import PGStore
+    store = PGStore()
+    with store._cursor(dict_rows=True) as cur:
+        cur.execute("SELECT id, document, embedding, sdg_tags, name FROM businesses")
+        pg_rows = list(cur.fetchall())
+    ids = [str(row["id"]) for row in pg_rows]
+    docs = [row["document"] or "" for row in pg_rows]
+    embeddings = [list(row["embedding"]) for row in pg_rows]
+    metadatas = [{"sdg_tags": row["sdg_tags"] or "", "name": row["name"] or str(row["id"])} for row in pg_rows]
     total = len(ids)
 
     # --- LogReg: use pre-stored embeddings (fast, no transformer) ---
@@ -763,43 +761,32 @@ def compare_models(
 
 
 # ---------------------------------------------------------------------------
-# ChromaDB-specific backfill
-# (Replace this function with a PostgreSQL UPDATE when migrating)
+# PostgreSQL backfill
 # ---------------------------------------------------------------------------
 
-def backfill_chroma(
-    store=None,
+def backfill_pg(
     model=None,
     threshold: float = THRESHOLD,
     dry_run: bool = False,
 ) -> dict:
     """
     Predict SDG tags for all businesses and write `predicted_sdg_tags`
-    into ChromaDB metadata.
+    into PostgreSQL.
 
     Uses the trained LogReg model when available (fastest: uses stored
-    ChromaDB embeddings, no transformer inference at all).
+    pgvector embeddings, no transformer inference at all).
     Falls back to zero-shot cosine similarity if no model is trained.
 
     Args:
-        store:     BusinessStore instance. Created automatically if None.
         model:     Loaded model dict. Loaded automatically if None.
         threshold: Probability threshold (LogReg) or cosine threshold (fallback).
         dry_run:   If True, print predictions but don't write to DB.
 
     Returns:
         Summary dict with counts.
-
-    PostgreSQL migration note:
-        Replace this function with:
-            SELECT id, embedding FROM businesses
-            predictions = predict_from_embeddings(embeddings, model)
-            UPDATE businesses SET predicted_sdg_tags = ? WHERE id = ?
     """
-    from db.chroma_store import BusinessStore
-
-    if store is None:
-        store = BusinessStore(persist_dir="./chroma_db")
+    from db.pg_store import PGStore
+    store = PGStore()
 
     # Try to load trained LogReg model; fall back to cosine similarity
     use_logreg = False
@@ -812,24 +799,28 @@ def backfill_chroma(
     elif isinstance(model, dict) and "classifier" in model:
         use_logreg = True
 
-    print("Fetching all businesses from ChromaDB...")
+    print("Fetching all businesses from PostgreSQL...")
     if use_logreg:
         # Pull stored embeddings — no transformer inference needed
-        all_data = store.collection.get(include=["embeddings", "metadatas"])
-        ids = all_data["ids"]
-        metadatas = all_data["metadatas"]
-        embeddings = all_data["embeddings"]
+        with store._cursor(dict_rows=True) as cur:
+            cur.execute("SELECT id, name, embedding FROM businesses")
+            pg_rows = list(cur.fetchall())
+        ids = [row["id"] for row in pg_rows]
+        names = [row["name"] or str(row["id"]) for row in pg_rows]
+        embeddings = [list(row["embedding"]) for row in pg_rows]
         total = len(ids)
         print(f"Using trained LogReg model on {total} businesses "
-              f"(threshold={threshold}, embeddings from ChromaDB)...")
+              f"(threshold={threshold}, embeddings from PostgreSQL)...")
         predictions = predict_from_embeddings(embeddings, model, threshold=threshold)
     else:
         # Fallback: zero-shot cosine similarity (no model required)
         from sentence_transformers import SentenceTransformer
-        all_data = store.collection.get(include=["metadatas", "documents"])
-        ids = all_data["ids"]
-        metadatas = all_data["metadatas"]
-        documents = all_data["documents"]
+        with store._cursor(dict_rows=True) as cur:
+            cur.execute("SELECT id, name, document FROM businesses")
+            pg_rows = list(cur.fetchall())
+        ids = [row["id"] for row in pg_rows]
+        names = [row["name"] or str(row["id"]) for row in pg_rows]
+        documents = [row["document"] or "" for row in pg_rows]
         total = len(ids)
         cos_threshold = threshold if threshold <= 0.5 else COSINE_THRESHOLD
         print(f"No trained model found — using cosine similarity on {total} businesses "
@@ -846,29 +837,22 @@ def backfill_chroma(
     if dry_run:
         print("\n[DRY RUN] Sample predictions (first 5 with results):")
         shown = 0
-        for meta, pred in zip(metadatas, predictions):
+        for name, pred in zip(names, predictions):
             if pred and shown < 5:
-                print(f"  {meta.get('name')}: {pred}")
+                print(f"  {name}: {pred}")
                 shown += 1
         return {"total": total, "with_predictions": with_pred, "dry_run": True}
 
-    # Write back to ChromaDB in batches
-    batch_size = 100
-    updated = 0
-    for i in range(0, total, batch_size):
-        chunk_ids = ids[i: i + batch_size]
-        chunk_metas = metadatas[i: i + batch_size]
-        chunk_preds = predictions[i: i + batch_size]
-
-        new_metas = []
-        for meta, pred in zip(chunk_metas, chunk_preds):
-            new_meta = dict(meta)
-            new_meta["predicted_sdg_tags"] = ", ".join(pred) if pred else ""
-            new_metas.append(new_meta)
-
-        store.collection.update(ids=chunk_ids, metadatas=new_metas)
-        updated += len(chunk_ids)
-        print(f"  Updated {updated}/{total}...")
+    # Write back to PostgreSQL
+    updates = [(", ".join(pred) if pred else "", bid) for bid, pred in zip(ids, predictions)]
+    from psycopg2.extras import execute_batch
+    with store._cursor(dict_rows=False) as cur:
+        execute_batch(
+            cur,
+            "UPDATE businesses SET predicted_sdg_tags = %s WHERE id = %s",
+            updates,
+            page_size=100,
+        )
 
     print(f"\nDone. {total} records updated with predicted_sdg_tags.")
     return {"total": total, "with_predictions": with_pred, "dry_run": False}
@@ -897,7 +881,7 @@ if __name__ == "__main__":
 
     if args.command == "train":
         print("=" * 50)
-        print("Training SDG LogReg classifier (ChromaDB embeddings + synthetic)")
+        print("Training SDG LogReg classifier (PostgreSQL embeddings + synthetic)")
         print("=" * 50)
         train()
 
@@ -910,15 +894,15 @@ if __name__ == "__main__":
 
     elif args.command == "compare":
         print("=" * 50)
-        print("Comparing LogReg vs SetFit on all ChromaDB businesses")
+        print("Comparing LogReg vs SetFit on all PostgreSQL businesses")
         print("=" * 50)
         compare_models(threshold=args.threshold)
 
     elif args.command == "backfill":
         print("=" * 50)
-        print("Backfilling predicted_sdg_tags into ChromaDB")
+        print("Backfilling predicted_sdg_tags into PostgreSQL")
         print("=" * 50)
-        result = backfill_chroma(threshold=args.threshold, dry_run=args.dry_run)
+        result = backfill_pg(threshold=args.threshold, dry_run=args.dry_run)
         print(f"\nResult: {json.dumps(result, indent=2)}")
 
     elif args.command == "predict":
@@ -930,19 +914,24 @@ if __name__ == "__main__":
         print(f"Predicted SDG tags: {tags}")
 
     elif args.command == "stats":
-        # Show current coverage in ChromaDB
-        os.environ["ANONYMIZED_TELEMETRY"] = "False"
-        from db.chroma_store import BusinessStore
-        store = BusinessStore(persist_dir="./chroma_db")
-        all_data = store.collection.get(include=["metadatas"])
-        total = len(all_data["metadatas"])
-        with_orig = sum(1 for m in all_data["metadatas"] if m.get("sdg_tags", "").strip())
-        with_pred = sum(1 for m in all_data["metadatas"] if m.get("predicted_sdg_tags", "").strip())
-        with_any = sum(
-            1 for m in all_data["metadatas"]
-            if m.get("sdg_tags", "").strip() or m.get("predicted_sdg_tags", "").strip()
-        )
-        print(f"\nSDG coverage in ChromaDB ({total} businesses):")
+        # Show current coverage in PostgreSQL
+        from db.pg_store import PGStore
+        store = PGStore()
+        with store._cursor(dict_rows=True) as cur:
+            cur.execute("""
+                SELECT
+                    COUNT(*) AS total,
+                    COUNT(CASE WHEN sdg_tags != '' THEN 1 END) AS with_orig,
+                    COUNT(CASE WHEN predicted_sdg_tags != '' THEN 1 END) AS with_pred,
+                    COUNT(CASE WHEN sdg_tags != '' OR predicted_sdg_tags != '' THEN 1 END) AS with_any
+                FROM businesses
+            """)
+            stats = dict(cur.fetchone())
+        total = stats["total"]
+        with_orig = stats["with_orig"]
+        with_pred = stats["with_pred"]
+        with_any = stats["with_any"]
+        print(f"\nSDG coverage in PostgreSQL ({total} businesses):")
         print(f"  Original sdg_tags          : {with_orig}  ({with_orig * 100 // total}%)")
-        print(f"  Predicted sdg_tags (SetFit) : {with_pred}  ({with_pred * 100 // total}%)")
-        print(f"  Either field filled         : {with_any}  ({with_any * 100 // total}%)")
+        print(f"  Predicted sdg_tags         : {with_pred}  ({with_pred * 100 // total}%)")
+        print(f"  Either field filled        : {with_any}  ({with_any * 100 // total}%)")

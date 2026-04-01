@@ -21,6 +21,11 @@ ml/models/
 *.bin
 *.safetensors
 
+# PostgreSQL
+*.dump
+*.sql.gz
+pgdata/          # only if using local volume mount instead of Docker named volume
+
 # Generated outputs
 reports/
 sessions/
@@ -54,3 +59,7 @@ plan.md
 notes/
 
 schema_cache.json
+
+# ChromaDB legacy (migration to PostgreSQL already done)
+scripts/migrate_chroma_to_pg.py
+db/chroma_store.py

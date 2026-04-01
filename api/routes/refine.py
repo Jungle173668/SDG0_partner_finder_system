@@ -39,6 +39,7 @@ class RefineRequest(BaseModel):
     liked: List[CompanyFeedback] = []
     disliked: List[CompanyFeedback] = []
     user_text: str = ""
+    allow_global_fallback: bool = False
 
 
 class RefineResponse(BaseModel):
@@ -337,10 +338,11 @@ def refine_search(session_id: str, req: RefineRequest):
     # ── 4. Build new_search_params in SearchRequest format ───────────────────
     # Start from original free-text params
     new_params: dict = {
-        "user_company_desc":  changes.get("user_company_desc",  current_params.get("user_company_desc", "")),
-        "partner_type_desc":  changes.get("partner_type_desc",  current_params.get("partner_type_desc", "")),
-        "other_requirements": changes.get("other_requirements", current_params.get("other_requirements", "")),
-        "parent_id": session_id,  # track lineage
+        "user_company_desc":    changes.get("user_company_desc",  current_params.get("user_company_desc", "")),
+        "partner_type_desc":    changes.get("partner_type_desc",  current_params.get("partner_type_desc", "")),
+        "other_requirements":   changes.get("other_requirements", current_params.get("other_requirements", "")),
+        "parent_id":            session_id,  # track lineage
+        "allow_global_fallback": req.allow_global_fallback,
     }
 
     # Merge B-class filter fields — mode priority: LLM explicit > original session > default hard
