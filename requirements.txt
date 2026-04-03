@@ -22,6 +22,10 @@ numpy==1.26.4
 
 # ── Agent / LLM ────────────────────────────────────────
 langgraph==0.6.11
+langchain==0.3.28
+langchain-core==0.3.83
+langchain-groq==0.3.8
+langsmith==0.4.37
 groq==0.37.1
 tavily-python==0.7.23
 
