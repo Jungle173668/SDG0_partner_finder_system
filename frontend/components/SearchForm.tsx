@@ -3,7 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import FilterRow, { FilterMode } from "./FilterRow";
-import { getSchema, startSearch, Schema, FilterEntry } from "@/lib/api";
+import { getSchema, startSearch, Schema, FilterEntry, SearchRequest } from "@/lib/api";
 
 // SDG full name → canonical number mapping (matches report_agent.py)
 const SDG_NUMBER: Record<string, string> = {
@@ -91,7 +91,7 @@ export default function SearchForm() {
 
     try {
       // Build request — only include filters with non-empty values
-      const req: Record<string, unknown> = {
+      const req: SearchRequest & Record<string, unknown> = {
         user_company_desc: userDesc,
         partner_type_desc: partnerDesc,
         other_requirements: otherReq,
@@ -108,7 +108,7 @@ export default function SearchForm() {
         }
       }
 
-      const { session_id } = await startSearch(req as Parameters<typeof startSearch>[0]);
+      const { session_id } = await startSearch(req as SearchRequest);
       router.push(`/results/${session_id}`);
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Something went wrong. Please try again.");
