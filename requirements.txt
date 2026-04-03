@@ -1,11 +1,11 @@
-# ── 数据采集 ──────────────────────────────────────────
+# ── Data Collection ──────────────────────────────────────────
 httpx==0.28.1
 beautifulsoup4==4.14.3
 requests==2.32.3
 pydantic==2.7.4
 python-dotenv==1.0.1
 
-# ── 数据库 ────────────────────────────────────────────
+# ── Data Base ────────────────────────────────────────────
 chromadb==0.5.5          # kept for migration script only
 psycopg2-binary==2.9.9   # PostgreSQL driver
 pgvector==0.3.6          # pgvector Python adapter (register_vector)
@@ -20,6 +20,6 @@ torch==2.2.2
 scikit-learn==1.6.1
 numpy==1.26.4
 
-# ── API 服务 (Phase 3) ───────────────────────────────
+# ── API Services (Phase 3) ───────────────────────────────
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
