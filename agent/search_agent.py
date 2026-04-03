@@ -252,11 +252,15 @@ def _relax_filters(filters: dict, level: int) -> dict:
     """
     Return a relaxed copy of the filters dict.
 
-    Level 1: drop SDG tags and claimed (strictest conditions).
-    Level 2: drop everything (handled by caller switching to pure semantic).
+    Level 1: drop categories (softest constraint — broad industry label).
+    Level 2: drop sdg_tags + claimed (mission tags and verification flag).
+    Hard filters (city, business_type, job_sector, company_size) are never
+    dropped here — Level 3 (pure semantic) is handled by the caller.
     """
     relaxed = dict(filters)
     if level >= 1:
+        relaxed.pop("categories", None)
+    if level >= 2:
         relaxed.pop("sdg_tags", None)
         relaxed.pop("claimed", None)
     return relaxed
@@ -497,21 +501,33 @@ def _selective_retry(
         logger.warning(f"SearchAgent retry: HyDE failed ({e}), reusing original embedding")
         retry_embedding = avg_embedding
 
-    # Search for new candidates, excluding already-seen IDs.
-    # If hard filters exist (e.g. city=London), use hybrid_search to respect them.
-    # Fall back to pure semantic only when hybrid returns fewer than needed.
-    strict_filters = {k: v for k, v in filters.items() if k in ("city", "business_type", "job_sector", "company_size", "claimed")}
-    if strict_filters:
-        raw_new = hybrid_search(retry_embedding, strict_filters, n_results=need + len(seen_ids))
-        logger.info(f"SearchAgent retry: hybrid with strict_filters={list(strict_filters.keys())} → {len(raw_new)} raw")
-        if len(raw_new) < need:
-            # Not enough filtered results — supplement with semantic (deduped)
-            semantic_extra = semantic_search_from_embedding(retry_embedding, n_results=need + len(seen_ids))
-            seen_after_hybrid = seen_ids | {c.get("id", c.get("slug", "")) for c in raw_new}
-            semantic_extra = [c for c in semantic_extra if c.get("id", c.get("slug", "")) not in seen_after_hybrid]
-            raw_new = raw_new + semantic_extra
-    else:
-        raw_new = semantic_search_from_embedding(retry_embedding, n_results=need + len(seen_ids))
+    # Search for replacements using the same 3-level fallback as the initial search.
+    # Level 0: full filters + vector
+    # Level 1: drop categories (skip if not present)
+    # Level 2: drop sdg_tags + claimed
+    # Level 3: pure semantic
+    fetch = need + len(seen_ids)
+    raw_new = hybrid_search(retry_embedding, filters, n_results=fetch) if filters else []
+    logger.info(f"SearchAgent retry level 0: {len(raw_new)} raw")
+
+    if len([c for c in raw_new if c.get("id", c.get("slug", "")) not in seen_ids]) < need:
+        if "categories" in filters:
+            relaxed1 = _relax_filters(filters, level=1)
+            raw_new = hybrid_search(retry_embedding, relaxed1, n_results=fetch)
+            logger.info(f"SearchAgent retry level 1 (drop categories): {len(raw_new)} raw")
+
+    if len([c for c in raw_new if c.get("id", c.get("slug", "")) not in seen_ids]) < need:
+        relaxed2 = _relax_filters(filters, level=2)
+        if relaxed2:
+            raw_new = hybrid_search(retry_embedding, relaxed2, n_results=fetch)
+        else:
+            raw_new = semantic_search_from_embedding(retry_embedding, n_results=fetch)
+        logger.info(f"SearchAgent retry level 2 (drop sdg+claimed): {len(raw_new)} raw")
+
+    if len([c for c in raw_new if c.get("id", c.get("slug", "")) not in seen_ids]) < need:
+        raw_new = semantic_search_from_embedding(retry_embedding, n_results=fetch)
+        logger.info(f"SearchAgent retry level 3 (pure semantic): {len(raw_new)} raw")
+
     new_candidates = [c for c in raw_new if c.get("id", c.get("slug", "")) not in seen_ids][:need]
 
     logger.info(f"SearchAgent retry: found {len(new_candidates)} fresh replacements")
@@ -617,49 +633,64 @@ def search_agent_node(state: AgentState) -> dict:
         return existing + extras[: target - len(existing)]
 
     if has_desc and has_filters:
-        # hybrid: vector + metadata
+        # hybrid: SQL WHERE + vector ORDER BY (pgvector single query)
         method = "hybrid"
         candidates = hybrid_search(avg_embedding, filters, n_results=10)
         logger.info(f"SearchAgent: hybrid_search → {len(candidates)} results (level 0)")
 
-        if len(candidates) == 0:
-            # No results at all — relax SDG + claimed and retry
-            relaxed = _relax_filters(filters, level=1)
-            candidates = hybrid_search(avg_embedding, relaxed, n_results=10)
+        if len(candidates) == 0 and "categories" in filters:
+            # Level 1: drop categories
+            relaxed1 = _relax_filters(filters, level=1)
+            candidates = hybrid_search(avg_embedding, relaxed1, n_results=10)
             fallback_level = 1
-            logger.info(f"SearchAgent: hybrid relaxed → {len(candidates)} results (level 1)")
+            logger.info(f"SearchAgent: hybrid level 1 (drop categories) → {len(candidates)} results")
 
         if len(candidates) == 0:
-            # Still nothing — drop all filters, pure semantic
-            candidates = semantic_search_from_embedding(avg_embedding, n_results=10)
+            # Level 2: drop sdg_tags + claimed
+            relaxed2 = _relax_filters(filters, level=2)
+            candidates = hybrid_search(avg_embedding, relaxed2, n_results=10)
             fallback_level = 2
+            logger.info(f"SearchAgent: hybrid level 2 (drop sdg+claimed) → {len(candidates)} results")
+
+        if len(candidates) == 0:
+            # Level 3: pure semantic — drop all filters
+            candidates = semantic_search_from_embedding(avg_embedding, n_results=10)
+            fallback_level = 3
             method = "semantic"
-            logger.info(f"SearchAgent: fallback to pure semantic → {len(candidates)} results (level 2)")
+            logger.info(f"SearchAgent: level 3 pure semantic → {len(candidates)} results")
         elif len(candidates) < MIN_RESULTS:
-            # Have some filtered results — pad with semantic, don't discard them
             candidates = _pad_with_semantic(candidates, MIN_RESULTS)
-            logger.info(f"SearchAgent: padded to {len(candidates)} results (kept filtered, added semantic)")
+            logger.info(f"SearchAgent: padded to {len(candidates)} results")
 
     elif has_filters and not has_desc:
-        # pure filter: no vector search
+        # pure SQL filter (no description → no vector)
         method = "sql"
         candidates = sql_filter(filters, n_results=10)
         logger.info(f"SearchAgent: sql_filter → {len(candidates)} results (level 0)")
 
-        if len(candidates) == 0:
-            relaxed = _relax_filters(filters, level=1)
-            candidates = sql_filter(relaxed, n_results=10)
+        if len(candidates) == 0 and "categories" in filters:
+            # Level 1: drop categories
+            relaxed1 = _relax_filters(filters, level=1)
+            candidates = sql_filter(relaxed1, n_results=10)
             fallback_level = 1
-            logger.info(f"SearchAgent: sql relaxed → {len(candidates)} results (level 1)")
+            logger.info(f"SearchAgent: sql level 1 (drop categories) → {len(candidates)} results")
 
         if len(candidates) == 0:
-            candidates = semantic_search_from_embedding(avg_embedding, n_results=10)
+            # Level 2: drop sdg_tags + claimed
+            relaxed2 = _relax_filters(filters, level=2)
+            candidates = sql_filter(relaxed2, n_results=10)
             fallback_level = 2
+            logger.info(f"SearchAgent: sql level 2 (drop sdg+claimed) → {len(candidates)} results")
+
+        if len(candidates) == 0:
+            # Level 3: pure semantic
+            candidates = semantic_search_from_embedding(avg_embedding, n_results=10)
+            fallback_level = 3
             method = "semantic"
-            logger.info(f"SearchAgent: fallback to pure semantic → {len(candidates)} results (level 2)")
+            logger.info(f"SearchAgent: level 3 pure semantic → {len(candidates)} results")
         elif len(candidates) < MIN_RESULTS:
             candidates = _pad_with_semantic(candidates, MIN_RESULTS)
-            logger.info(f"SearchAgent: padded to {len(candidates)} results (kept filtered, added semantic)")
+            logger.info(f"SearchAgent: padded to {len(candidates)} results")
 
     else:
         # pure semantic: no filters
