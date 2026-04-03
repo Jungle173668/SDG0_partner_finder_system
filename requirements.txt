@@ -5,10 +5,9 @@ requests==2.32.3
 pydantic==2.7.4
 python-dotenv==1.0.1
 
-# ── Data Base ────────────────────────────────────────────
-chromadb==0.5.5          # kept for migration script only
-psycopg2-binary==2.9.9   # PostgreSQL driver
-pgvector==0.3.6          # pgvector Python adapter (register_vector)
+# ── Database ────────────────────────────────────────────
+psycopg2-binary==2.9.9
+pgvector==0.3.6
 
 # ── AI / ML ───────────────────────────────────────────
 sentence-transformers==3.0.1
@@ -16,10 +15,11 @@ setfit==1.1.3
 datasets==4.5.0
 transformers==4.45.2
 accelerate==1.10.1
-torch==2.2.2
+--extra-index-url https://download.pytorch.org/whl/cpu
+torch==2.2.2+cpu
 scikit-learn==1.6.1
 numpy==1.26.4
 
-# ── API Services (Phase 3) ───────────────────────────────
+# ── API Services ───────────────────────────────────────
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
