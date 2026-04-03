@@ -20,6 +20,11 @@ torch==2.2.2+cpu
 scikit-learn==1.6.1
 numpy==1.26.4
 
+# ── Agent / LLM ────────────────────────────────────────
+langgraph==0.6.11
+groq==0.37.1
+tavily-python==0.7.23
+
 # ── API Services ───────────────────────────────────────
 fastapi==0.115.5
 uvicorn[standard]==0.32.1

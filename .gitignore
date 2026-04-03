@@ -23,6 +23,7 @@ ml/models/
 
 # PostgreSQL
 *.dump
+*.sql
 *.sql.gz
 pgdata/          # only if using local volume mount instead of Docker named volume
 
