@@ -96,4 +96,13 @@ def health():
 from api.session_store import cleanup_expired
 cleanup_expired()
 
+# Warm up embedding model and DB connection pool so first request is fast
+try:
+    from agent.tools import _get_encoder, _get_store
+    _get_encoder()
+    _get_store()
+    logger.info("Warm-up complete — encoder and DB pool ready")
+except Exception as e:
+    logger.warning(f"Warm-up failed (non-fatal): {e}")
+
 logger.info("SDGZero Partner Finder API ready — docs at /api/docs")
