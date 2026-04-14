@@ -1,27 +1,54 @@
 """
-SetFit-based SDG multi-label classifier.
+SDG multi-label classifier.
 
-Zero-shot training: uses official SDG descriptions to generate synthetic
-training data — no manual labelling required.
+Predicts which UN Sustainable Development Goals (SDGs) a company contributes to,
+based on its text description. Supports 5 methods, all tracked via MLflow + Dagshub.
+
+Methods
+-------
+1. zero_shot   Cosine similarity between company embedding and SDG keyword embeddings.
+               No training required. Model: all-MiniLM-L6-v2. F1=0.238.
+
+2. logreg      OneVsRest LogisticRegression trained on 384-dim pgvector embeddings
+               + synthetic SDG keyword embeddings. F1=0.474 (overfit — train==eval set).
+
+3. setfit      Two-stage few-shot fine-tuning: contrastive learning on all-MiniLM-L6-v2
+               + logistic regression head. Model saved to ml/models/sdg_setfit_v2. F1=0.308.
+
+4. nli         Natural Language Inference via cross-encoder/nli-deberta-v3-small.
+               High recall (0.93) but too slow for production (17 inference calls/company).
+               F1=0.347.
+
+5. llm         Few-shot prompting via Groq (llama-3.1-8b-instant). 4 labeled examples
+               in prompt. Best method: F1=0.810. ✅ Current production method.
+
+Production
+----------
+LLM few-shot is the current production method (registered as sdg-classifier v1 in
+MLflow Model Registry). All 492 companies backfilled with predicted_sdg_tags.
 
 Usage
 -----
-# One-time setup (run once, takes ~5 min on CPU):
-    python -m ml.sdg_classifier train
-    python -m ml.sdg_classifier backfill       # write predicted_sdg_tags into ChromaDB
+# Train models (one-time):
+    python -m ml.sdg_classifier train            # LogReg
+    python -m ml.sdg_classifier train_setfit     # SetFit
 
-# Predict for a single business (called by pipeline):
-    from ml.sdg_classifier import load_model, predict
-    model = load_model()
-    tags = predict("Company description text...", model)
+# Backfill all businesses with LLM predictions:
+    python -m ml.sdg_classifier backfill_llm
+    python -m ml.sdg_classifier backfill_llm --overwrite   # re-run all
 
-PostgreSQL migration
---------------------
-Only `backfill_chroma()` is ChromaDB-specific.
-`predict()` and `predict_batch()` are DB-agnostic — they just take text and return lists.
-When migrating to PostgreSQL, replace `backfill_chroma()` with a function that runs
-    UPDATE businesses SET predicted_sdg_tags = ? WHERE id = ?
-Everything else stays the same.
+# Evaluate a method against ground-truth sdg_tags (20 labeled companies):
+    python -m ml.sdg_classifier evaluate --method zero_shot
+    python -m ml.sdg_classifier evaluate --method logreg
+    python -m ml.sdg_classifier evaluate --method setfit
+    python -m ml.sdg_classifier evaluate --method nli
+    python -m ml.sdg_classifier evaluate --method llm
+
+# Threshold sweep across [0.2, 0.3, 0.4, 0.5, 0.6]:
+    python -m ml.sdg_classifier sweep --method llm
+
+# DB coverage stats:
+    python -m ml.sdg_classifier stats
 """
 
 import os
@@ -32,6 +59,9 @@ from pathlib import Path
 from typing import Optional
 
 import numpy as np
+from dotenv import load_dotenv
+
+load_dotenv()
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -51,7 +81,7 @@ SDG_LABELS: list[str] = [
     "Clean Water And Sanitation",               # SDG 6
     "Affordable And Clean Energy",              # SDG 7
     "Decent Work And Economic Growth",          # SDG 8
-    "Industry Innovation Cities And Communities",  # SDG 9 (SDGZero naming)
+    "Industry Innovation And Infrastructure",  # SDG 9 (SDGZero naming)
     "Reduced Inequalities",                     # SDG 10
     "Sustainable Cities And Communities",       # SDG 11
     "Responsible Consumption And Production",   # SDG 12
@@ -110,7 +140,7 @@ SDG_DESCRIPTIONS: dict[str, str] = {
         "entrepreneurship, SME support, economic development, employment services, HR, "
         "recruitment, business growth, professional development."
     ),
-    "Industry Innovation Cities And Communities": (
+    "Industry Innovation And Infrastructure": (
         "Build resilient infrastructure, promote inclusive and sustainable industrialisation "
         "and foster innovation. Make cities inclusive, safe, resilient and sustainable. "
         "R&D, deep tech, manufacturing, engineering, smart cities, urban planning, "
@@ -180,7 +210,7 @@ SDG_KEYWORDS: dict[str, str] = {
     "Clean Water And Sanitation": "water treatment sanitation drinking water wastewater conservation irrigation flood",
     "Affordable And Clean Energy": "renewable energy solar wind energy efficiency electric vehicles green electricity carbon neutral heat pumps",
     "Decent Work And Economic Growth": "employment job creation entrepreneurship SME business growth HR recruitment professional development workers rights",
-    "Industry Innovation Cities And Communities": "R&D technology manufacturing engineering smart cities infrastructure innovation startups deep tech",
+    "Industry Innovation And Infrastructure": "R&D technology manufacturing engineering smart cities infrastructure innovation startups deep tech",
     "Reduced Inequalities": "social justice racial equality disability inclusion migrant anti-discrimination diversity equity underserved",
     "Sustainable Cities And Communities": "urban sustainability green buildings public transport waste management net zero housing city planning",
     "Responsible Consumption And Production": "circular economy recycling waste reduction sustainable supply chain eco-friendly packaging zero waste upcycling",
@@ -274,7 +304,7 @@ def train(
     synth_texts = [SDG_KEYWORDS[label] for label in SDG_LABELS]
     synth_embs = encoder.encode(synth_texts, normalize_embeddings=True)
 
-    for i, label in enumerate(SDG_LABELS):
+    for i, _ in enumerate(SDG_LABELS):
         vec = [0] * len(SDG_LABELS)
         vec[i] = 1
         X.append(synth_embs[i])
@@ -385,20 +415,9 @@ def predict_from_embeddings(
     model: dict,
     threshold: float = THRESHOLD,
 ) -> list[list[str]]:
-    """
-    Predict SDG tags directly from pre-computed embedding vectors.
-    Use this with ChromaDB stored embeddings to avoid any transformer inference.
-
-    Args:
-        embeddings: Array-like of shape (N, 384) — e.g. from ChromaDB get().
-        model:      Loaded model dict from load_model().
-        threshold:  Probability threshold.
-
-    Returns:
-        List of lists of SDG label names, one per embedding.
-    """
+    """Predict SDG tags from pre-computed 384-dim embedding vectors (from pgvector)."""
     X = np.array(embeddings)
-    probs = model["classifier"].predict_proba(X)                     # (N, 17)
+    probs = model["classifier"].predict_proba(X)
     labels = model["labels"]
     return [
         [labels[j] for j, p in enumerate(row) if p >= threshold]
@@ -667,185 +686,235 @@ def predict_setfit_batch(
     ]
 
 
-def compare_models(
-    threshold: float = THRESHOLD,
-    n_samples: int = 8,
-) -> dict:
+# ---------------------------------------------------------------------------
+# Helpers for evaluation analysis
+# ---------------------------------------------------------------------------
+
+def _plot_confusion(y_true, y_pred, method: str, threshold: float) -> str:
     """
-    Compare LogReg vs SetFit side-by-side on all PostgreSQL businesses.
-
-    Prints:
-      - Overall coverage for both models
-      - Exact-match agreement rate
-      - n_samples sampled businesses showing real tags + both predictions
-
-    Args:
-        threshold:  Probability threshold for both models.
-        n_samples:  How many example businesses to print (half labeled, half random).
-
-    Returns:
-        Summary dict with counts.
+    Generate a per-label confusion heatmap (TP/FP/FN counts per SDG).
+    Saves to a temp PNG and returns the file path.
     """
-    import random
+    import tempfile
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
 
-    from db.pg_store import PGStore
-    store = PGStore()
-    with store._cursor(dict_rows=True) as cur:
-        cur.execute("SELECT id, document, embedding, sdg_tags, name FROM businesses")
-        pg_rows = list(cur.fetchall())
-    ids = [str(row["id"]) for row in pg_rows]
-    docs = [row["document"] or "" for row in pg_rows]
-    embeddings = [list(row["embedding"]) for row in pg_rows]
-    metadatas = [{"sdg_tags": row["sdg_tags"] or "", "name": row["name"] or str(row["id"])} for row in pg_rows]
-    total = len(ids)
+    short_labels = [
+        lbl.replace("And", "&").replace("Sustainable", "Sust.")
+           .replace("Responsible", "Resp.").replace("Communities", "Comm.")
+        for lbl in SDG_LABELS
+    ]
 
-    # --- LogReg: use pre-stored embeddings (fast, no transformer) ---
-    print("Loading LogReg model...")
-    logreg = load_model()
-    logreg_preds = predict_from_embeddings(embeddings, logreg, threshold=threshold)
-    print(f"LogReg predictions done.")
+    tp = (y_true * y_pred).sum(axis=0)
+    fp = ((1 - y_true) * y_pred).sum(axis=0)
+    fn = (y_true * (1 - y_pred)).sum(axis=0)
 
-    # --- SetFit: encode texts with fine-tuned transformer ---
-    print("Loading SetFit model...")
-    try:
-        sf_model = load_setfit_model()
-    except FileNotFoundError:
-        print("SetFit model not found. Run: python -m ml.sdg_classifier train_setfit")
-        return {}
-    print(f"Running SetFit on {total} texts (this may take a minute)...")
-    sf_preds = predict_setfit_batch(docs, sf_model, threshold=threshold)
-    print("SetFit predictions done.")
+    data = np.stack([tp, fp, fn], axis=0)  # shape (3, 17)
 
-    # --- Summary stats ---
-    lr_with = sum(1 for p in logreg_preds if p)
-    sf_with = sum(1 for p in sf_preds if p)
-    exact_agree = sum(1 for a, b in zip(logreg_preds, sf_preds) if set(a) == set(b))
+    fig, ax = plt.subplots(figsize=(14, 4))
+    im = ax.imshow(data, aspect="auto", cmap="YlOrRd")
+    ax.set_xticks(range(len(SDG_LABELS)))
+    ax.set_xticklabels(short_labels, rotation=45, ha="right", fontsize=7)
+    ax.set_yticks([0, 1, 2])
+    ax.set_yticklabels(["TP", "FP", "FN"])
+    ax.set_title(f"Per-SDG confusion — {method} (threshold={threshold})")
+    plt.colorbar(im, ax=ax)
+    plt.tight_layout()
 
-    print(f"\n{'=' * 62}")
-    print(f"  MODEL COMPARISON  |  {total} businesses  |  threshold={threshold}")
-    print(f"{'=' * 62}")
-    print(f"  LogReg  coverage  :  {lr_with}/{total}  ({lr_with * 100 // total}%)")
-    print(f"  SetFit  coverage  :  {sf_with}/{total}  ({sf_with * 100 // total}%)")
-    print(f"  Exact agreement   :  {exact_agree}/{total}  ({exact_agree * 100 // total}%)")
-    print(f"{'=' * 62}")
+    tmp = tempfile.NamedTemporaryFile(suffix=".png", delete=False,
+                                      prefix=f"confusion_{method}_")
+    plt.savefig(tmp.name, dpi=120)
+    plt.close(fig)
+    return tmp.name
 
-    # --- Sample output ---
-    labeled_idx = [i for i, m in enumerate(metadatas) if m.get("sdg_tags", "").strip()]
-    unlabeled_idx = [i for i in range(total) if i not in set(labeled_idx)]
-    half = n_samples // 2
-    sample_idx = labeled_idx[:min(half, len(labeled_idx))]
-    remainder = n_samples - len(sample_idx)
-    if remainder > 0 and unlabeled_idx:
-        sample_idx += random.sample(unlabeled_idx, min(remainder, len(unlabeled_idx)))
 
-    print(f"\n  SAMPLE PREDICTIONS  ({len(sample_idx)} businesses)\n")
-    for i in sample_idx:
-        name = metadatas[i].get("name", ids[i])[:45]
-        real = metadatas[i].get("sdg_tags", "")
-        lr = logreg_preds[i]
-        sf = sf_preds[i]
-        status = "agree" if set(lr) == set(sf) else "DIFFER"
-        print(f"  [{name}]")
-        if real:
-            print(f"    Real   : {real}")
-        print(f"    LogReg : {lr if lr else '(none)'}")
-        print(f"    SetFit : {sf if sf else '(none)'}")
-        print(f"    Status : {status}\n")
+def _per_label_analysis(y_true, y_pred, rows) -> dict:
+    """
+    Compute per-SDG F1 and per-category precision to surface error patterns.
+    Returns a dict summary for MLflow logging.
+    """
+    from sklearn.metrics import f1_score as _f1
+
+    per_label_f1 = _f1(y_true, y_pred, average=None, zero_division=0)
+    best_sdg  = SDG_LABELS[per_label_f1.argmax()]
+    worst_sdg = SDG_LABELS[per_label_f1.argmin()]
+
+    # Per-category precision
+    cat_stats: dict = {}
+    for i, row in enumerate(rows):
+        cat = (row.get("categories") or "Unknown").split(",")[0].strip()
+        if cat not in cat_stats:
+            cat_stats[cat] = {"tp": 0, "fp": 0, "fn": 0}
+        tp = int((y_true[i] * y_pred[i]).sum())
+        fp = int(((1 - y_true[i]) * y_pred[i]).sum())
+        fn = int((y_true[i] * (1 - y_pred[i])).sum())
+        cat_stats[cat]["tp"] += tp
+        cat_stats[cat]["fp"] += fp
+        cat_stats[cat]["fn"] += fn
+
+    print("\n  Per-SDG F1 (top 3 best / worst):")
+    ranked = sorted(zip(SDG_LABELS, per_label_f1), key=lambda x: -x[1])
+    for lbl, f in ranked[:3]:
+        print(f"    ✓ {lbl}: {f:.2f}")
+    for lbl, f in ranked[-3:]:
+        print(f"    ✗ {lbl}: {f:.2f}")
+
+    print("\n  Per-category error pattern:")
+    for cat, s in sorted(cat_stats.items()):
+        total = s["tp"] + s["fp"] + s["fn"]
+        if total == 0:
+            continue
+        prec = s["tp"] / (s["tp"] + s["fp"]) if (s["tp"] + s["fp"]) > 0 else 0
+        print(f"    {cat}: precision={prec:.2f}  (TP={s['tp']} FP={s['fp']} FN={s['fn']})")
 
     return {
-        "total": total,
-        "logreg_coverage": lr_with,
-        "setfit_coverage": sf_with,
-        "exact_agreement": exact_agree,
+        "best_sdg": best_sdg,
+        "worst_sdg": worst_sdg,
+        "best_sdg_f1": round(float(per_label_f1.max()), 4),
+        "worst_sdg_f1": round(float(per_label_f1.min()), 4),
     }
 
 
 # ---------------------------------------------------------------------------
-# PostgreSQL backfill
+# LLM (Groq) backfill
 # ---------------------------------------------------------------------------
 
-def backfill_pg(
-    model=None,
-    threshold: float = THRESHOLD,
+_LLM_PROMPT = """\
+You are an expert in UN Sustainable Development Goals (SDGs).
+
+Given a company description, identify which SDGs this company EXPLICITLY or CLEARLY contributes to.
+
+Rules:
+1. If the description explicitly mentions SDG numbers or sustainability focus areas, prioritise those.
+2. Only include SDGs with clear evidence in the description. Do not guess.
+3. Return at most 4 SDGs. If none clearly apply, return an empty list.
+4. Use ONLY the exact SDG names from this list:
+{sdg_list}
+
+Here are examples of correct SDG assignments:
+
+Example 1:
+Description: Heat Engineer Software Ltd provides advanced heating design software and compliance tools for UK heating engineers, renewable installers and low-carbon consultants. Their tools support the transition to heat pumps and other low-carbon heating systems.
+Output: {{"sdg_tags": ["Affordable And Clean Energy", "Climate Action", "Responsible Consumption And Production", "Industry Innovation And Infrastructure"]}}
+
+Example 2:
+Description: Lancashire Women is a registered charity supporting women across Lancashire, providing trauma-informed services that help women improve their wellbeing, build resilience and move towards independence. Services include mental health support, domestic abuse recovery and employment skills.
+Output: {{"sdg_tags": ["Gender Equality", "Good Health And Well-Being", "Decent Work And Economic Growth", "Reduced Inequalities"]}}
+
+Example 3:
+Description: Zuri Adventures is a UK based luxury travel consultancy specialising in tailor made wildlife, adventure and milestone journeys. They partner with conservation projects and local communities across Africa, with a focus on responsible tourism and protecting natural habitats.
+Output: {{"sdg_tags": ["Life On Land", "Life Below Water", "Responsible Consumption And Production", "Climate Action"]}}
+
+Example 4:
+Description: SLART is a UK-based Outsider Artist who transforms themes of mortality, identity and human vulnerability into bold paintings that challenge social norms and advocate for marginalised communities.
+Output: {{"sdg_tags": ["Gender Equality", "Reduced Inequalities", "Peace Justice And Strong Institutions"]}}
+
+Now classify this company:
+
+Company description:
+{description}
+
+Respond with valid JSON only, no explanation:
+{{"sdg_tags": ["SDG name1", "SDG name2"]}}
+"""
+
+def backfill_llm(
     dry_run: bool = False,
+    batch_size: int = 5,
+    skip_existing: bool = True,
 ) -> dict:
     """
-    Predict SDG tags for all businesses and write `predicted_sdg_tags`
-    into PostgreSQL.
+    Use LLM (Groq via existing agent.llm) to predict SDG tags for all businesses.
 
-    Uses the trained LogReg model when available (fastest: uses stored
-    pgvector embeddings, no transformer inference at all).
-    Falls back to zero-shot cosine similarity if no model is trained.
+    Strategy:
+    - First pass: companies whose description explicitly mentions SDGs → high confidence
+    - Second pass: remaining companies → LLM infers from context
+    - Writes results to predicted_sdg_tags in PostgreSQL
 
     Args:
-        model:     Loaded model dict. Loaded automatically if None.
-        threshold: Probability threshold (LogReg) or cosine threshold (fallback).
-        dry_run:   If True, print predictions but don't write to DB.
+        dry_run:       If True, print predictions but don't write to DB.
+        batch_size:    Requests per second throttle (Groq rate limit).
+        skip_existing: Skip companies that already have predicted_sdg_tags.
 
     Returns:
         Summary dict with counts.
     """
+    import json
+    import re
+    import time
     from db.pg_store import PGStore
+    from agent.llm import get_llm
+    from psycopg2.extras import execute_batch
+
     store = PGStore()
+    llm = get_llm("groq")
 
-    # Try to load trained LogReg model; fall back to cosine similarity
-    use_logreg = False
-    if model is None:
+    sdg_list = "\n".join(f"- {lbl}" for lbl in SDG_LABELS)
+
+    with store._cursor(dict_rows=True) as cur:
+        if skip_existing:
+            cur.execute(
+                "SELECT id, name, document FROM businesses "
+                "WHERE (predicted_sdg_tags IS NULL OR predicted_sdg_tags = '') "
+                "AND document IS NOT NULL AND document != ''"
+            )
+        else:
+            cur.execute(
+                "SELECT id, name, document FROM businesses "
+                "WHERE document IS NOT NULL AND document != ''"
+            )
+        rows = list(cur.fetchall())
+
+    total = len(rows)
+    print(f"Running LLM backfill on {total} businesses "
+          f"({'skip existing' if skip_existing else 'overwrite all'})...")
+
+    updates = []
+    errors = 0
+
+    for i, row in enumerate(rows):
+        doc = (row["document"] or "")[:800]  # truncate to avoid token overflow
+        prompt = _LLM_PROMPT.format(sdg_list=sdg_list, description=doc)
+
         try:
-            model = load_model()
-            use_logreg = True
-        except FileNotFoundError:
-            pass
-    elif isinstance(model, dict) and "classifier" in model:
-        use_logreg = True
+            response = llm.invoke(prompt)
+            content = response.content.strip()
 
-    print("Fetching all businesses from PostgreSQL...")
-    if use_logreg:
-        # Pull stored embeddings — no transformer inference needed
-        with store._cursor(dict_rows=True) as cur:
-            cur.execute("SELECT id, name, embedding FROM businesses")
-            pg_rows = list(cur.fetchall())
-        ids = [row["id"] for row in pg_rows]
-        names = [row["name"] or str(row["id"]) for row in pg_rows]
-        embeddings = [list(row["embedding"]) for row in pg_rows]
-        total = len(ids)
-        print(f"Using trained LogReg model on {total} businesses "
-              f"(threshold={threshold}, embeddings from PostgreSQL)...")
-        predictions = predict_from_embeddings(embeddings, model, threshold=threshold)
-    else:
-        # Fallback: zero-shot cosine similarity (no model required)
-        from sentence_transformers import SentenceTransformer
-        with store._cursor(dict_rows=True) as cur:
-            cur.execute("SELECT id, name, document FROM businesses")
-            pg_rows = list(cur.fetchall())
-        ids = [row["id"] for row in pg_rows]
-        names = [row["name"] or str(row["id"]) for row in pg_rows]
-        documents = [row["document"] or "" for row in pg_rows]
-        total = len(ids)
-        cos_threshold = threshold if threshold <= 0.5 else COSINE_THRESHOLD
-        print(f"No trained model found — using cosine similarity on {total} businesses "
-              f"(threshold={cos_threshold})...")
-        encoder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-        predictions = predict_zero_shot_batch(documents, encoder, threshold=cos_threshold)
+            # Extract JSON robustly
+            match = re.search(r'\{.*\}', content, re.DOTALL)
+            if not match:
+                raise ValueError(f"No JSON found in response: {content[:100]}")
+            parsed = json.loads(match.group())
+            tags = parsed.get("sdg_tags", [])
 
-    # Stats
-    with_pred = sum(1 for p in predictions if p)
-    print(f"\nPrediction complete:")
-    print(f"  Total businesses : {total}")
-    print(f"  With predictions : {with_pred}  ({with_pred * 100 // total}%)")
+            # Validate against known SDG labels
+            valid_tags = [t for t in tags if t in SDG_LABELS]
+            tag_str = ", ".join(valid_tags)
+            updates.append((tag_str, row["id"]))
+
+            print(f"  [{i+1}/{total}] {row['name'][:40]}: {valid_tags or '(none)'}")
+
+        except Exception as e:
+            print(f"  [{i+1}/{total}] {row['name'][:40]}: ERROR — {e}")
+            updates.append(("", row["id"]))
+            errors += 1
+
+        # Rate limit: Groq free tier ~30 req/min
+        if (i + 1) % batch_size == 0:
+            time.sleep(1)
+
+    with_pred = sum(1 for tag_str, _ in updates if tag_str)
+
+    print(f"\nLLM prediction complete:")
+    print(f"  Processed  : {total}")
+    print(f"  With tags  : {with_pred}  ({with_pred * 100 // total if total else 0}%)")
+    print(f"  Errors     : {errors}")
 
     if dry_run:
-        print("\n[DRY RUN] Sample predictions (first 5 with results):")
-        shown = 0
-        for name, pred in zip(names, predictions):
-            if pred and shown < 5:
-                print(f"  {name}: {pred}")
-                shown += 1
-        return {"total": total, "with_predictions": with_pred, "dry_run": True}
+        print("\n[DRY RUN] Not writing to DB.")
+        return {"total": total, "with_predictions": with_pred, "errors": errors, "dry_run": True}
 
-    # Write back to PostgreSQL
-    updates = [(", ".join(pred) if pred else "", bid) for bid, pred in zip(ids, predictions)]
-    from psycopg2.extras import execute_batch
     with store._cursor(dict_rows=False) as cur:
         execute_batch(
             cur,
@@ -853,9 +922,235 @@ def backfill_pg(
             updates,
             page_size=100,
         )
+    print(f"Done. {total} records updated.")
 
-    print(f"\nDone. {total} records updated with predicted_sdg_tags.")
-    return {"total": total, "with_predictions": with_pred, "dry_run": False}
+    # MLflow logging
+    try:
+        import dagshub
+        import mlflow
+        dagshub.init(
+            repo_owner="jungle173770",
+            repo_name="SDG0_partner_finder_system",
+            mlflow=True,
+        )
+        with mlflow.start_run(run_name="backfill_llm"):
+            mlflow.log_param("method", "groq_llm")
+            mlflow.log_param("model", "llama-3.1-8b-instant")
+            mlflow.log_param("total_businesses", total)
+            mlflow.log_param("skip_existing", skip_existing)
+            mlflow.log_metric("coverage_rate", round(with_pred / total, 4) if total else 0)
+            mlflow.log_metric("with_predictions", with_pred)
+            mlflow.log_metric("errors", errors)
+        print("MLflow run logged to Dagshub.")
+    except Exception as e:
+        print(f"MLflow logging skipped: {e}")
+
+    return {"total": total, "with_predictions": with_pred, "errors": errors, "dry_run": False}
+
+
+# ---------------------------------------------------------------------------
+# Evaluation against ground-truth sdg_tags
+# ---------------------------------------------------------------------------
+
+def evaluate(method: str = "zero_shot", threshold: float = THRESHOLD) -> dict:
+    """
+    Evaluate prediction quality against ground-truth sdg_tags.
+
+    Uses the 20 businesses that have real sdg_tags as labeled eval set.
+    Computes micro-averaged precision, recall, F1 across all SDG labels.
+
+    Args:
+        method:    "zero_shot" | "nli" | "setfit" | "logreg" | "llm"
+        threshold: prediction threshold
+
+    Returns:
+        dict with precision, recall, f1, support, and per-label breakdown
+    """
+    from db.pg_store import PGStore
+    from sklearn.metrics import precision_score, recall_score, f1_score
+    import numpy as np
+
+    store = PGStore()
+    with store._cursor(dict_rows=True) as cur:
+        cur.execute(
+            "SELECT id, name, document, sdg_tags, categories FROM businesses "
+            "WHERE sdg_tags IS NOT NULL AND sdg_tags != ''"
+        )
+        rows = list(cur.fetchall())
+
+    if not rows:
+        print("No labeled examples found.")
+        return {}
+
+    n_labels = len(SDG_LABELS)
+
+    y_true, y_pred = [], []
+
+    if method == "nli":
+        from sentence_transformers import CrossEncoder
+        nli_model_name = "cross-encoder/nli-deberta-v3-small"
+        print(f"Loading NLI model: {nli_model_name}...")
+        nli_model = CrossEncoder(nli_model_name)
+        texts = [row["document"] or "" for row in rows]
+        preds_list = []
+        for text in texts:
+            pairs = [(text, f"This organisation contributes to: {SDG_DESCRIPTIONS[lbl]}") for lbl in SDG_LABELS]
+            scores = nli_model.predict(pairs, apply_softmax=True)
+            # scores shape: (n_labels, 3) — [contradiction, neutral, entailment]
+            entailment_scores = [float(s[2]) for s in scores]
+            predicted = [SDG_LABELS[i] for i, s in enumerate(entailment_scores) if s >= threshold]
+            preds_list.append(predicted)
+        print("NLI predictions done.")
+    elif method == "setfit":
+        from setfit import SetFitModel
+        setfit_path = MODEL_DIR.parent / "sdg_setfit_v2"
+        if not setfit_path.exists():
+            raise FileNotFoundError(f"SetFit model not found at {setfit_path}")
+        print(f"Loading SetFit model from {setfit_path}...")
+        sf_model = SetFitModel.from_pretrained(str(setfit_path))
+        texts = [row["document"] or "" for row in rows]
+        preds_list = [predict_setfit(t, sf_model, threshold=threshold) for t in texts]
+    elif method == "llm":
+        import json as _json
+        import re as _re
+        import time as _time
+        from agent.llm import get_llm
+        llm = get_llm("groq")
+        texts = [row["document"] or "" for row in rows]
+        sdg_list = "\n".join(f"- {lbl}" for lbl in SDG_LABELS)
+        preds_list = []
+        print(f"Running LLM (Groq) on {len(texts)} labeled businesses...")
+        for i, text in enumerate(texts):
+            prompt = _LLM_PROMPT.format(sdg_list=sdg_list, description=text[:800])
+            try:
+                response = llm.invoke(prompt)
+                match = _re.search(r'\{.*\}', response.content.strip(), _re.DOTALL)
+                parsed = _json.loads(match.group()) if match else {}
+                tags = [t for t in parsed.get("sdg_tags", []) if t in SDG_LABELS]
+            except Exception as e:
+                print(f"  [{i+1}] ERROR: {e}")
+                tags = []
+            preds_list.append(tags)
+            if (i + 1) % 5 == 0:
+                _time.sleep(1)
+        print("LLM predictions done.")
+    elif method == "logreg":
+        logreg_model = load_model()  # raises FileNotFoundError if not trained yet
+        with store._cursor(dict_rows=True) as cur:
+            cur.execute(
+                "SELECT id, embedding FROM businesses "
+                "WHERE sdg_tags IS NOT NULL AND sdg_tags != ''"
+            )
+            emb_rows = list(cur.fetchall())
+        id_order = [r["id"] for r in emb_rows]
+        embeddings = [list(r["embedding"]) for r in emb_rows]
+        # reorder rows to match emb_rows order
+        id_to_row = {r["id"]: r for r in rows}
+        rows = [id_to_row[i] for i in id_order if i in id_to_row]
+        print(f"Using LogReg on {len(rows)} labeled businesses (threshold={threshold})...")
+        print("  ⚠️  WARNING: training set = eval set — F1 will be inflated")
+        preds_list = predict_from_embeddings(embeddings, logreg_model, threshold=threshold)
+    else:
+        from sentence_transformers import SentenceTransformer
+        print("Running zero-shot cosine similarity...")
+        encoder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
+        texts = [row["document"] or "" for row in rows]
+        preds_list = predict_zero_shot_batch(texts, encoder, threshold=threshold)
+
+    for row, pred_tags in zip(rows, preds_list):
+        true_tags = [t.strip() for t in (row["sdg_tags"] or "").split(",") if t.strip()]
+        true_vec = [1 if SDG_LABELS[i] in true_tags else 0 for i in range(n_labels)]
+        pred_vec = [1 if SDG_LABELS[i] in pred_tags else 0 for i in range(n_labels)]
+        y_true.append(true_vec)
+        y_pred.append(pred_vec)
+
+    y_true = np.array(y_true)
+    y_pred = np.array(y_pred)
+
+    precision = precision_score(y_true, y_pred, average="micro", zero_division=0)
+    recall    = recall_score(y_true, y_pred, average="micro", zero_division=0)
+    f1        = f1_score(y_true, y_pred, average="micro", zero_division=0)
+    support   = int(y_true.sum())
+
+    print(f"\n=== Evaluation: {method} (threshold={threshold}) ===")
+    print(f"  Samples  : {len(rows)}")
+    print(f"  Precision: {precision:.3f}")
+    print(f"  Recall   : {recall:.3f}")
+    print(f"  F1       : {f1:.3f}")
+    print(f"  Support  : {support} true labels total")
+
+    # Per-label + per-category analysis
+    label_summary = _per_label_analysis(y_true, y_pred, rows)
+
+    # MLflow logging
+    try:
+        import dagshub
+        import mlflow
+        dagshub.init(
+            repo_owner="jungle173770",
+            repo_name="SDG0_partner_finder_system",
+            mlflow=True,
+        )
+        heatmap_path = _plot_confusion(y_true, y_pred, method, threshold)
+        with mlflow.start_run(run_name=f"eval_{method}"):
+            mlflow.log_param("method", method)
+            mlflow.log_param("threshold", threshold)
+            mlflow.log_param("n_samples", len(rows))
+            mlflow.log_param("best_sdg", label_summary["best_sdg"])
+            mlflow.log_param("worst_sdg", label_summary["worst_sdg"])
+            mlflow.log_metric("precision", round(precision, 4))
+            mlflow.log_metric("recall", round(recall, 4))
+            mlflow.log_metric("f1", round(f1, 4))
+            mlflow.log_metric("support", support)
+            mlflow.log_metric("best_sdg_f1", label_summary["best_sdg_f1"])
+            mlflow.log_metric("worst_sdg_f1", label_summary["worst_sdg_f1"])
+            mlflow.log_artifact(heatmap_path, artifact_path="confusion")
+            if method == "llm":
+                mlflow.log_text(_LLM_PROMPT, "prompt_v1.txt")
+    except Exception as e:
+        print(f"MLflow logging skipped: {e}")
+
+    return {
+        "method": method,
+        "threshold": threshold,
+        "n_samples": len(rows),
+        "precision": round(precision, 4),
+        "recall": round(recall, 4),
+        "f1": round(f1, 4),
+        "support": support,
+        **label_summary,
+    }
+
+
+# ---------------------------------------------------------------------------
+# Threshold sweep
+# ---------------------------------------------------------------------------
+
+def sweep(method: str = "llm", thresholds: list = None) -> list:
+    """
+    Evaluate a method across multiple thresholds to find the optimal F1.
+    Each run is logged separately to MLflow for comparison.
+
+    Args:
+        method:     Method to sweep (same choices as evaluate).
+        thresholds: List of thresholds to try. Defaults to [0.2, 0.3, 0.4, 0.5, 0.6].
+
+    Returns:
+        List of result dicts sorted by F1.
+    """
+    if thresholds is None:
+        thresholds = [0.2, 0.3, 0.4, 0.5, 0.6]
+
+    results = []
+    for t in thresholds:
+        print(f"\n{'='*40}\nSweeping {method} @ threshold={t}\n{'='*40}")
+        result = evaluate(method=method, threshold=t)
+        results.append(result)
+
+    results.sort(key=lambda r: -r["f1"])
+    print(f"\n=== Sweep complete: best threshold={results[0]['threshold']} "
+          f"(F1={results[0]['f1']}) ===")
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -870,13 +1165,18 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="SDG classifier (LogReg + SetFit)")
     parser.add_argument(
         "command",
-        choices=["train", "train_setfit", "compare", "backfill", "predict", "stats"],
+        choices=["train", "train_setfit", "backfill_llm", "predict", "stats", "evaluate", "sweep"],
         help="Command to run",
     )
     parser.add_argument("--text", type=str, help="Text to predict (for 'predict' command)")
     parser.add_argument("--threshold", type=float, default=THRESHOLD,
                         help=f"Probability threshold (default: {THRESHOLD})")
     parser.add_argument("--dry-run", action="store_true", help="Dry run for backfill")
+    parser.add_argument("--overwrite", action="store_true",
+                        help="Overwrite existing predicted_sdg_tags (for backfill_llm)")
+    parser.add_argument("--method", type=str, default="zero_shot",
+                        choices=["zero_shot", "nli", "setfit", "logreg", "llm"],
+                        help="Method to evaluate (for 'evaluate' command)")
     args = parser.parse_args()
 
     if args.command == "train":
@@ -892,18 +1192,29 @@ if __name__ == "__main__":
         print("=" * 50)
         train_setfit()
 
-    elif args.command == "compare":
+    elif args.command == "evaluate":
+        _method = getattr(args, "method", "zero_shot")
         print("=" * 50)
-        print("Comparing LogReg vs SetFit on all PostgreSQL businesses")
+        print(f"Evaluating SDG classifier: {_method}")
         print("=" * 50)
-        compare_models(threshold=args.threshold)
-
-    elif args.command == "backfill":
-        print("=" * 50)
-        print("Backfilling predicted_sdg_tags into PostgreSQL")
-        print("=" * 50)
-        result = backfill_pg(threshold=args.threshold, dry_run=args.dry_run)
+        result = evaluate(method=_method, threshold=args.threshold)
         print(f"\nResult: {json.dumps(result, indent=2)}")
+
+    elif args.command == "backfill_llm":
+        print("=" * 50)
+        print("Backfilling predicted_sdg_tags using Groq LLM")
+        print("=" * 50)
+        skip = not getattr(args, "overwrite", False)
+        result = backfill_llm(dry_run=args.dry_run, skip_existing=skip)
+        print(f"\nResult: {json.dumps(result, indent=2)}")
+
+    elif args.command == "sweep":
+        _method = getattr(args, "method", "llm")
+        print("=" * 50)
+        print(f"Threshold sweep: {_method}")
+        print("=" * 50)
+        results = sweep(method=_method)
+        print(f"\nAll results:\n{json.dumps(results, indent=2)}")
 
     elif args.command == "predict":
         if not args.text:

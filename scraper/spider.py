@@ -11,10 +11,13 @@ BASE_URL = "https://sdgzero.com/wp-json/geodir/v2/businesses"
 DEFAULT_DELAY = 1.0  # seconds between requests (be polite)
 
 
+_HEADERS = {"User-Agent": "Mozilla/5.0 (compatible; SDGZero-Scraper/1.0)"}
+
+
 def fetch_page(page: int, per_page: int = 100) -> list[dict]:
     """Fetch one page of businesses from the API."""
     params = {"page": page, "per_page": per_page}
-    response = requests.get(BASE_URL, params=params, timeout=30)
+    response = requests.get(BASE_URL, params=params, headers=_HEADERS, timeout=30)
     response.raise_for_status()
     return response.json()
 

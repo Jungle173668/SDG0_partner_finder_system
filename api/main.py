@@ -99,9 +99,11 @@ cleanup_expired()
 # Warm up embedding model and DB connection pool so first request is fast
 try:
     from agent.tools import _get_encoder, _get_store
+    from agent.scoring_agent import _get_cross_encoder
     _get_encoder()
     _get_store()
-    logger.info("Warm-up complete — encoder and DB pool ready")
+    _get_cross_encoder()
+    logger.info("Warm-up complete — encoder, cross-encoder and DB pool ready")
 except Exception as e:
     logger.warning(f"Warm-up failed (non-fatal): {e}")
 

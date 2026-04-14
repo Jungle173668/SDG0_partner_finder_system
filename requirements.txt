@@ -29,6 +29,10 @@ langsmith==0.4.37
 groq==0.37.1
 tavily-python==0.7.23
 
+# ── Experiment Tracking ────────────────────────────────
+mlflow==2.22.0
+dagshub==0.3.45
+
 # ── API Services ───────────────────────────────────────
 fastapi==0.115.5
 uvicorn[standard]==0.32.1

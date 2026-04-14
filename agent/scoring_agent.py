@@ -442,10 +442,10 @@ def scoring_agent_node(state: AgentState) -> dict:
     #   DB text (always) + Tavily web content (when available)
     # This gives LLM richer context for specific, well-grounded reasoning.
     # ------------------------------------------------------------------
-    logger.info(f"ScoringAgent: generating reasoning for {len(top5)} companies (parallel)...")
+    logger.info(f"ScoringAgent: generating reasoning for {len(top5)} companies (sequential)...")
 
-    def _reason_one(args):
-        i, company = args
+    scored_companies = []
+    for i, company in enumerate(top5):
         slug             = company.get("slug") or company.get("id", "unknown")
         research_entry   = research.get(slug, {})
         research_summary = research_entry.get("summary", "")
@@ -468,16 +468,7 @@ def scoring_agent_node(state: AgentState) -> dict:
             logger.error(f"ScoringAgent: reasoning failed for {slug!r}: {e}")
             errors.append(f"ScoringAgent: reasoning error for {slug} — {e}")
             reasoning = ""
-        return i, {**company, "reasoning": reasoning}
-
-    results_map: dict[int, dict] = {}
-    with ThreadPoolExecutor(max_workers=2) as pool:
-        futures = {pool.submit(_reason_one, (i, c)): i for i, c in enumerate(top5)}
-        for future in as_completed(futures):
-            idx, scored = future.result()
-            results_map[idx] = scored
-
-    scored_companies = [results_map[i] for i in range(len(top5))]
+        scored_companies.append({**company, "reasoning": reasoning})
 
     # Log quality distribution summary
     quality_dist = {q: sum(1 for c in scored_companies if c["match_quality"] == q)

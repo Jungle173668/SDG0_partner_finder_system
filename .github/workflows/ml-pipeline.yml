@@ -1,0 +1,120 @@
+name: ML Pipeline
+
+# ─── Triggers ────────────────────────────────────────────────────────────────
+on:
+  schedule:
+    - cron: '0 2 * * 1'   # Every Monday 02:00 UTC
+
+  workflow_dispatch:        # Manual trigger with optional inputs
+    inputs:
+      method:
+        description: 'Evaluation method (leave empty to run all)'
+        required: false
+        default: 'all'
+        type: choice
+        options: [all, zero_shot, logreg, setfit, nli, llm]
+      promote:
+        description: 'Promote champion to Production after evaluation?'
+        required: false
+        type: boolean
+        default: false
+      skip_scrape:
+        description: 'Skip scraping (only run evaluation)'
+        required: false
+        type: boolean
+        default: false
+
+# ─── Jobs ────────────────────────────────────────────────────────────────────
+jobs:
+  ml-pipeline:
+    name: Update data + evaluate models
+    runs-on: ubuntu-latest
+
+    env:
+      DATABASE_URL:   ${{ secrets.DATABASE_URL }}
+      GROQ_API_KEY:   ${{ secrets.GROQ_API_KEY }}
+      DAGSHUB_TOKEN:  ${{ secrets.DAGSHUB_TOKEN }}
+      MLFLOW_TRACKING_USERNAME: ${{ secrets.DAGSHUB_TOKEN }}
+      MLFLOW_TRACKING_PASSWORD: ${{ secrets.DAGSHUB_TOKEN }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt --extra-index-url https://download.pytorch.org/whl/cpu
+
+      # ── Step 1: Incremental scrape ─────────────────────────────────────────
+      - name: Incremental scrape + embed new companies
+        if: ${{ github.event.inputs.skip_scrape != 'true' }}
+        run: python -m pipeline.update
+
+      # ── Step 2: Backfill LLM predictions for new companies ─────────────────
+      - name: Backfill SDG tags for new companies (LLM)
+        if: ${{ github.event.inputs.skip_scrape != 'true' }}
+        run: python -m ml.sdg_classifier backfill_llm   # skip_existing=True by default
+
+      # ── Step 3: Check if ground truth labels increased ─────────────────────
+      - name: Check ground truth count
+        id: gt_check
+        run: |
+          COUNT=$(python - << 'EOF'
+          from db.pg_store import PGStore
+          store = PGStore()
+          conn = store._pool.getconn()
+          cur = conn.cursor()
+          cur.execute("SELECT COUNT(*) FROM businesses WHERE sdg_tags IS NOT NULL AND sdg_tags != ''")
+          print(cur.fetchone()[0])
+          cur.close()
+          store._pool.putconn(conn)
+          EOF
+          )
+          echo "gt_count=$COUNT" >> $GITHUB_OUTPUT
+          echo "Ground truth count: $COUNT"
+          # Trigger evaluation if count > 20 (initial baseline) or manual trigger
+          if [ "$COUNT" -gt "20" ] || [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "run_eval=true" >> $GITHUB_OUTPUT
+          else
+            echo "run_eval=false" >> $GITHUB_OUTPUT
+          fi
+
+      # ── Step 4: Evaluate all methods (or selected method) ──────────────────
+      - name: Evaluate — zero_shot
+        if: steps.gt_check.outputs.run_eval == 'true' && (github.event.inputs.method == 'all' || github.event.inputs.method == 'zero_shot' || github.event.inputs.method == '')
+        run: python -m ml.sdg_classifier evaluate --method zero_shot
+
+      - name: Evaluate — logreg
+        if: steps.gt_check.outputs.run_eval == 'true' && (github.event.inputs.method == 'all' || github.event.inputs.method == 'logreg' || github.event.inputs.method == '')
+        run: python -m ml.sdg_classifier evaluate --method logreg
+
+      - name: Evaluate — setfit
+        if: steps.gt_check.outputs.run_eval == 'true' && (github.event.inputs.method == 'all' || github.event.inputs.method == 'setfit' || github.event.inputs.method == '')
+        run: python -m ml.sdg_classifier evaluate --method setfit
+
+      - name: Evaluate — nli
+        if: steps.gt_check.outputs.run_eval == 'true' && (github.event.inputs.method == 'all' || github.event.inputs.method == 'nli' || github.event.inputs.method == '')
+        run: python -m ml.sdg_classifier evaluate --method nli
+
+      - name: Evaluate — llm
+        if: steps.gt_check.outputs.run_eval == 'true' && (github.event.inputs.method == 'all' || github.event.inputs.method == 'llm' || github.event.inputs.method == '')
+        run: python -m ml.sdg_classifier evaluate --method llm
+
+      # ── Step 5: Select champion ────────────────────────────────────────────
+      - name: Select champion
+        if: steps.gt_check.outputs.run_eval == 'true' && github.event.inputs.promote == 'true'
+        run: python -m ml.select_champion --promote
+
+      # ── Step 6: If champion changed, commit config + trigger Railway deploy ─
+      - name: Commit champion config if changed
+        if: steps.gt_check.outputs.run_eval == 'true' && github.event.inputs.promote == 'true'
+        run: |
+          git config user.email "actions@github.com"
+          git config user.name "GitHub Actions"
+          git add config/active_method.json 2>/dev/null || true
+          git diff --staged --quiet || git commit -m "chore: update champion method [skip ci]"
+          git push
+        # Railway listens to main branch — a new commit triggers auto-redeploy
