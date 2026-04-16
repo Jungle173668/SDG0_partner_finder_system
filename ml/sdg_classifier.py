@@ -795,20 +795,20 @@ Rules:
 Here are examples of correct SDG assignments:
 
 Example 1:
-Description: Heat Engineer Software Ltd provides advanced heating design software and compliance tools for UK heating engineers, renewable installers and low-carbon consultants. Their tools support the transition to heat pumps and other low-carbon heating systems.
-Output: {{"sdg_tags": ["Affordable And Clean Energy", "Climate Action", "Responsible Consumption And Production", "Industry Innovation And Infrastructure"]}}
+Description: GreenGrid Energy provides community-owned solar installation services for low-income households and social housing estates across the Midlands, helping residents reduce energy bills while cutting carbon emissions.
+Output: {{"sdg_tags": ["Affordable And Clean Energy", "Climate Action", "No Poverty", "Reduced Inequalities"]}}
 
 Example 2:
-Description: Lancashire Women is a registered charity supporting women across Lancashire, providing trauma-informed services that help women improve their wellbeing, build resilience and move towards independence. Services include mental health support, domestic abuse recovery and employment skills.
-Output: {{"sdg_tags": ["Gender Equality", "Good Health And Well-Being", "Decent Work And Economic Growth", "Reduced Inequalities"]}}
+Description: FoodBridge Network is a logistics platform connecting surplus food from supermarkets and restaurants to local food banks and community kitchens, reducing food waste and tackling food insecurity in urban areas.
+Output: {{"sdg_tags": ["Zero Hunger", "Responsible Consumption And Production", "Sustainable Cities And Communities"]}}
 
 Example 3:
-Description: Zuri Adventures is a UK based luxury travel consultancy specialising in tailor made wildlife, adventure and milestone journeys. They partner with conservation projects and local communities across Africa, with a focus on responsible tourism and protecting natural habitats.
-Output: {{"sdg_tags": ["Life On Land", "Life Below Water", "Responsible Consumption And Production", "Climate Action"]}}
+Description: AquaClean Technologies develops low-cost water filtration units for rural communities in sub-Saharan Africa, using locally sourced materials and training local technicians to maintain the systems independently.
+Output: {{"sdg_tags": ["Clean Water And Sanitation", "Good Health And Well-Being", "Decent Work And Economic Growth", "Reduced Inequalities"]}}
 
 Example 4:
-Description: SLART is a UK-based Outsider Artist who transforms themes of mortality, identity and human vulnerability into bold paintings that challenge social norms and advocate for marginalised communities.
-Output: {{"sdg_tags": ["Gender Equality", "Reduced Inequalities", "Peace Justice And Strong Institutions"]}}
+Description: CivicCode is a nonprofit that runs free coding bootcamps for unemployed young people in deprived areas, with a focus on placing graduates into tech jobs and building long-term career pathways out of poverty.
+Output: {{"sdg_tags": ["Decent Work And Economic Growth", "Reduced Inequalities", "Quality Education", "No Poverty"]}}
 
 Now classify this company:
 
