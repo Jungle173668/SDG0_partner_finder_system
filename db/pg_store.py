@@ -50,6 +50,18 @@ _BTYPE_MAP = {
     "b2c": "Business2Consumer (B2C)",
 }
 
+# job_sector: display name → DB stored value
+_SECTOR_MAP = {
+    "Private":        "Private Sector",
+    "Public":         "Public Sector",
+    "private":        "Private Sector",
+    "public":         "Public Sector",
+    "Private Sector": "Private Sector",
+    "Public Sector":  "Public Sector",
+    "Agencies":       "Agencies",
+    "agencies":       "Agencies",
+}
+
 
 # ---------------------------------------------------------------------------
 # Filter builder — converts SearchFilters dict → SQL WHERE + params
@@ -82,8 +94,9 @@ def build_pg_where(filters: dict) -> tuple[str, list]:
         params.append(bt)
 
     if filters.get("job_sector"):
+        js = _SECTOR_MAP.get(filters["job_sector"], filters["job_sector"])
         conditions.append("job_sector = %s")
-        params.append(filters["job_sector"])
+        params.append(js)
 
     if filters.get("company_size"):
         conditions.append("company_size = %s")
