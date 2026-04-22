@@ -1,0 +1,275 @@
+[
+  {
+    "id": 1,
+    "query": "Find renewable energy companies in London",
+    "expected_tool": "search_companies",
+    "expected_key_params": {"query": "renewable energy", "city": "London"},
+    "notes": "Semantic search with city filter"
+  },
+  {
+    "id": 2,
+    "query": "I'm looking for sustainability consultancies",
+    "expected_tool": "search_companies",
+    "expected_key_params": {"query": "sustainability consultancy"},
+    "notes": "Pure semantic search, no filters"
+  },
+  {
+    "id": 3,
+    "query": "Show me companies focused on climate action in Preston",
+    "expected_tool": "search_companies",
+    "expected_key_params": {"city": "Preston", "sdg": "Climate Action"},
+    "notes": "SDG filter + city filter"
+  },
+  {
+    "id": 4,
+    "query": "Find B2B companies working on clean water solutions",
+    "expected_tool": "search_companies",
+    "expected_key_params": {"query": "clean water", "business_type": "B2B"},
+    "notes": "Semantic search with business_type filter"
+  },
+  {
+    "id": 5,
+    "query": "What companies do waste management and recycling?",
+    "expected_tool": "search_companies",
+    "expected_key_params": {"query": "waste management recycling"},
+    "notes": "Category-style query mapped to semantic search"
+  },
+  {
+    "id": 6,
+    "query": "Looking for a media agency for branding and advertising",
+    "expected_tool": "search_companies",
+    "expected_key_params": {"query": "media agency branding advertising"},
+    "notes": "Marketing/media semantic search"
+  },
+  {
+    "id": 7,
+    "query": "Find social enterprises focused on gender equality",
+    "expected_tool": "search_companies",
+    "expected_key_params": {"query": "gender equality social enterprise", "sdg": "Gender Equality"},
+    "notes": "SDG 5 — LLM may use sdg filter or embed it in query, both valid"
+  },
+  {
+    "id": 8,
+    "query": "Show me health and wellness companies that serve consumers",
+    "expected_tool": "search_companies",
+    "expected_key_params": {"query": "health wellness", "business_type": "B2C"},
+    "notes": "Category + B2C filter"
+  },
+  {
+    "id": 9,
+    "query": "Find education and training providers near Blackburn",
+    "expected_tool": "search_companies",
+    "expected_key_params": {"query": "education training", "city": "Blackburn"},
+    "notes": "Category + city filter"
+  },
+  {
+    "id": 10,
+    "query": "Which companies work on affordable and clean energy?",
+    "expected_tool": "search_companies",
+    "expected_key_params": {"query": "affordable clean energy", "sdg": "Affordable And Clean Energy"},
+    "notes": "SDG 7 — LLM may use sdg filter or embed in query, both valid"
+  },
+  {
+    "id": 11,
+    "query": "List all B2B companies in the database",
+    "expected_tool": "filter_companies",
+    "expected_key_params": {"business_type": "B2B"},
+    "notes": "Pure structured filter, no semantic intent"
+  },
+  {
+    "id": 12,
+    "query": "Show me all verified/claimed companies",
+    "expected_tool": "filter_companies",
+    "expected_key_params": {"claimed": true},
+    "notes": "Claimed filter only"
+  },
+  {
+    "id": 13,
+    "query": "Filter all companies in London that are B2C",
+    "expected_tool": "filter_companies",
+    "expected_key_params": {"city": "London", "business_type": "B2C"},
+    "notes": "Multiple exact filters, no semantic query"
+  },
+  {
+    "id": 14,
+    "query": "Show me all companies focused on Climate Action SDG",
+    "expected_tool": "filter_companies",
+    "expected_key_params": {"sdg": "Climate Action"},
+    "notes": "Explicit 'SDG' mention implies structured filter rather than semantic search"
+  },
+  {
+    "id": 15,
+    "query": "List all private sector companies in Preston",
+    "expected_tool": "filter_companies",
+    "expected_key_params": {"city": "Preston", "job_sector": "Private"},
+    "notes": "job_sector + city filter"
+  },
+  {
+    "id": 16,
+    "query": "Show companies in the Energy & Renewables category",
+    "expected_tool": "filter_companies",
+    "expected_key_params": {"category": "Energy"},
+    "notes": "Explicit category filter"
+  },
+  {
+    "id": 17,
+    "query": "Tell me about the company with slug heat-engineer-software-ltd",
+    "expected_tool": "get_company",
+    "expected_key_params": {"slug": "heat-engineer-software-ltd"},
+    "notes": "Direct slug lookup"
+  },
+  {
+    "id": 18,
+    "query": "Get the full profile of zuri-adventures",
+    "expected_tool": "get_company",
+    "expected_key_params": {"slug": "zuri-adventures"},
+    "notes": "Full profile request with slug"
+  },
+  {
+    "id": 19,
+    "query": "What do I know about lancashire-women company?",
+    "expected_tool": "get_company",
+    "expected_key_params": {"slug": "lancashire-women"},
+    "notes": "Company detail lookup by slug"
+  },
+  {
+    "id": 20,
+    "query": "Show me full details for stain-media",
+    "expected_tool": "get_company",
+    "expected_key_params": {"slug": "stain-media"},
+    "notes": "Full detail request"
+  },
+  {
+    "id": 21,
+    "query": "Give me all information about the company slart-ltd",
+    "expected_tool": "get_company",
+    "expected_key_params": {"slug": "slart-ltd"},
+    "notes": "Full company profile"
+  },
+  {
+    "id": 22,
+    "query": "I run a carbon audit and net-zero consulting firm in London. Find me the best partners.",
+    "expected_tool": "find_partners",
+    "expected_key_params": {"my_company_desc": "carbon audit", "city": "London"},
+    "notes": "Classic find_partners with explicit city"
+  },
+  {
+    "id": 23,
+    "query": "We are a renewable energy startup. Help us find investment or funding partners.",
+    "expected_tool": "find_partners",
+    "expected_key_params": {"my_company_desc": "renewable energy"},
+    "notes": "find_partners — ambiguous, 'investment partners' may read as search"
+  },
+  {
+    "id": 24,
+    "query": "My company provides sustainable packaging. I want to find logistics partners in Preston.",
+    "expected_tool": "find_partners",
+    "expected_key_params": {"my_company_desc": "sustainable packaging", "city": "Preston"},
+    "notes": "find_partners with city filter"
+  },
+  {
+    "id": 25,
+    "query": "We are an EdTech company focused on quality education. Find us B2B technology partners.",
+    "expected_tool": "find_partners",
+    "expected_key_params": {"my_company_desc": "EdTech", "business_type": "B2B"},
+    "notes": "find_partners with business_type filter"
+  },
+  {
+    "id": 26,
+    "query": "What is SDG 13?",
+    "expected_tool": null,
+    "expected_key_params": {},
+    "notes": "General knowledge question — LLM should answer from own knowledge, no tool needed"
+  },
+  {
+    "id": 27,
+    "query": "Explain what Climate Action means",
+    "expected_tool": null,
+    "expected_key_params": {},
+    "notes": "Definitional question — LLM should answer from own knowledge, no tool needed"
+  },
+  {
+    "id": 28,
+    "query": "What does B2B stand for?",
+    "expected_tool": null,
+    "expected_key_params": {},
+    "notes": "General question unrelated to database lookup"
+  },
+  {
+    "id": 29,
+    "query": "How does the partner matching pipeline work?",
+    "expected_tool": null,
+    "expected_key_params": {},
+    "notes": "System question — LLM should explain from context, not query DB"
+  },
+  {
+    "id": 30,
+    "query": "What is the difference between B2B and B2C?",
+    "expected_tool": null,
+    "expected_key_params": {},
+    "notes": "Conceptual question, no tool needed"
+  },
+  {
+    "id": 31,
+    "query": "What cities are available in the database?",
+    "expected_tool": "list_filters",
+    "expected_key_params": {},
+    "notes": "Explicit request for available city values"
+  },
+  {
+    "id": 32,
+    "query": "What SDG goals can I filter by?",
+    "expected_tool": "list_filters",
+    "expected_key_params": {},
+    "notes": "Explicit request for available SDG values"
+  },
+  {
+    "id": 33,
+    "query": "Show me all available categories in the system",
+    "expected_tool": "list_filters",
+    "expected_key_params": {},
+    "notes": "Explicit request for category options"
+  },
+  {
+    "id": 34,
+    "query": "What business types are supported?",
+    "expected_tool": "list_filters",
+    "expected_key_params": {},
+    "notes": "Explicit request for business_type enum values"
+  },
+  {
+    "id": 35,
+    "query": "Find companeis in Londen doing renewble energy",
+    "expected_tool": "search_companies",
+    "expected_key_params": {"query": "renewable energy", "city": "London"},
+    "notes": "Robustness: typos in city and query"
+  },
+  {
+    "id": 36,
+    "query": "sdg 7 companies",
+    "expected_tool": "filter_companies",
+    "expected_key_params": {"sdg": "clean energy"},
+    "notes": "Robustness: SDG number instead of name — structured filter intent, both tools valid but filter_companies more appropriate"
+  },
+  {
+    "id": 37,
+    "query": "b2b firms climate change",
+    "expected_tool": "search_companies",
+    "expected_key_params": {"query": "climate change", "business_type": "B2B"},
+    "notes": "Robustness: abbreviated informal keyword-style input"
+  },
+  {
+    "id": 38,
+    "query": "sustainability consultants manchester",
+    "expected_tool": "search_companies",
+    "expected_key_params": {"query": "sustainability consultant"},
+    "notes": "Robustness: no verbs, keyword-style — Manchester not in DB so city filter may be skipped"
+  },
+  {
+    "id": 39,
+    "query": "get me details on heat-enginner-software-ltd",
+    "expected_tool": "get_company",
+    "expected_key_params": {"slug": "heat-engineer-software-ltd"},
+    "notes": "Robustness: typo in slug — LLM should correct to heat-engineer-software-ltd"
+  }
+]

@@ -78,12 +78,19 @@ def _format_company(company: dict, *, include_document: bool = False) -> dict:
     Return a clean subset of company fields for MCP tool output.
 
     Strips internal fields (embedding, similarity) that are not useful
-    to an MCP client, and truncates the full document to 300 chars.
+    to an MCP client. Extracts only the Description section from the
+    document field to avoid repeating structured fields (name, city, etc.).
     """
     sdg = company.get("sdg_tags") or company.get("predicted_sdg_tags") or ""
-    description = company.get("document", "")
+    raw = company.get("document", "")
+    # Extract only the Description section — name/city/categories are already
+    # returned as structured fields, so repeating them wastes tokens.
+    if "Description:" in raw:
+        description = raw.split("Description:", 1)[1].strip()
+    else:
+        description = raw.strip()
     if not include_document:
-        description = description[:300] + ("..." if len(description) > 300 else "")
+        description = description[:800] + ("..." if len(description) > 800 else "")
 
     return {
         "name":          company.get("name", ""),
@@ -122,7 +129,7 @@ def search_companies(
 
     IMPORTANT: sdg and category use fuzzy matching (substring), so partial values work
     (e.g. sdg="climate" matches "Climate Action"). city must be an exact match
-    (case-sensitive). If unsure of valid values, call list_filters() first.
+    (case-sensitive), e.g. "London", "Preston", "Blackburn".
 
     Args:
         query:         Natural language description of the company or partner type you're looking for.
@@ -193,8 +200,8 @@ def filter_companies(
     No vector search — results are sorted by membership tier (premium first).
     Use this when you want deterministic filtering without semantic ranking.
 
-    IMPORTANT: If you are unsure of valid values for any field, call list_filters()
-    first to retrieve all available options from the database.
+    IMPORTANT: sdg and category use fuzzy matching so partial values work.
+    city must be an exact match (case-sensitive), e.g. "London", "Preston".
 
     Args:
         city:          Exact city name — must match DB exactly (case-sensitive).
@@ -244,9 +251,11 @@ def list_filters() -> dict:
     """
     Return all valid filter values available in the SDGZero database.
 
-    Call this tool BEFORE using filter_companies, search_companies, or find_partners
-    when you are unsure what values to pass for city, sdg, category, business_type,
-    or job_sector. This prevents empty results caused by invalid field values.
+    Only call this when the user EXPLICITLY asks what options are available,
+    e.g. "what cities are in the database?", "what SDG goals can I filter by?".
+    Do NOT call this as a precautionary step before every search or filter —
+    sdg/category support fuzzy matching and city values like "London", "Preston"
+    are commonly known and can be passed directly.
 
     Returns:
         A dict with keys:
@@ -323,6 +332,12 @@ def find_partners(
       2. ResearchAgent — Tavily web enrichment for each candidate
       3. ScoringAgent  — Cross-encoder reranking + LLM reasoning
       4. ReportAgent   — Structured Markdown report with outreach drafts
+
+    WHEN TO USE:
+    - User describes THEIR OWN company ("I am...", "We are...", "My company does X")
+      AND wants to find partners → use this tool.
+    - User is just looking for a type of company ("find me renewable energy firms")
+      WITHOUT describing themselves → use search_companies instead.
 
     This tool takes 20-60 seconds. Use search_companies for faster lookups.
 
