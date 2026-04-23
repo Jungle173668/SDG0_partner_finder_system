@@ -442,14 +442,14 @@ def scoring_agent_node(state: AgentState) -> dict:
     #   DB text (always) + Tavily web content (when available)
     # This gives LLM richer context for specific, well-grounded reasoning.
     # ------------------------------------------------------------------
-    logger.info(f"ScoringAgent: generating reasoning for {len(top5)} companies (sequential)...")
+    logger.info(f"ScoringAgent: generating reasoning for {len(top5)} companies (parallel)...")
 
-    scored_companies = []
-    for i, company in enumerate(top5):
-        slug             = company.get("slug") or company.get("id", "unknown")
-        research_entry   = research.get(slug, {})
+    def _reason_one(args):
+        idx, company = args
+        slug           = company.get("slug") or company.get("id", "unknown")
+        research_entry = research.get(slug, {})
         research_summary = research_entry.get("summary", "")
-        source           = research_entry.get("source", "db")
+        source         = research_entry.get("source", "db")
         try:
             reasoning = _run_reasoning(
                 user_company_desc=user_desc,
@@ -459,16 +459,22 @@ def scoring_agent_node(state: AgentState) -> dict:
                 research_summary=research_summary,
             )
             logger.info(
-                f"ScoringAgent: #{i+1} {company.get('name', slug)!r} — "
+                f"ScoringAgent: #{idx+1} {company.get('name', slug)!r} — "
                 f"score={company['cross_encoder_score']:.3f} "
                 f"quality={company['match_quality']} "
                 f"source={source}"
             )
+            return idx, {**company, "reasoning": reasoning}
         except Exception as e:
             logger.error(f"ScoringAgent: reasoning failed for {slug!r}: {e}")
             errors.append(f"ScoringAgent: reasoning error for {slug} — {e}")
-            reasoning = ""
-        scored_companies.append({**company, "reasoning": reasoning})
+            return idx, {**company, "reasoning": ""}
+
+    results = [None] * len(top5)
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        for idx, company_with_reasoning in executor.map(_reason_one, enumerate(top5)):
+            results[idx] = company_with_reasoning
+    scored_companies = results
 
     # Log quality distribution summary
     quality_dist = {q: sum(1 for c in scored_companies if c["match_quality"] == q)

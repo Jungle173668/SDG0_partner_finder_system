@@ -50,13 +50,16 @@ Thumbs.db
 *.log
 logs/
 
+# Local backups
+backup*.sql
+
 # IDE / tools
 .claude/
 
 # plan
 plan.md
 
-# 本地笔记（不上传）
+# Notes
 notes/
 
 schema_cache.json
@@ -66,3 +69,6 @@ mlruns/
 # ChromaDB legacy (migration to PostgreSQL already done)
 scripts/migrate_chroma_to_pg.py
 db/chroma_store.py
+
+# Evaluation
+eval/ablation_study.py

@@ -96,13 +96,17 @@ def health():
 from api.session_store import cleanup_expired
 cleanup_expired()
 
-# Warm up embedding model and DB connection pool so first request is fast
+# Warm up embedding model and DB connection pool so first request is fast.
+# We run a dummy encode/predict to trigger PyTorch JIT compilation —
+# without this, the first real request pays a 30s compilation penalty.
 try:
     from agent.tools import _get_encoder, _get_store
     from agent.scoring_agent import _get_cross_encoder
-    _get_encoder()
+    encoder = _get_encoder()
+    encoder.encode(["warmup"], show_progress_bar=False)
     _get_store()
-    _get_cross_encoder()
+    cross_encoder = _get_cross_encoder()
+    cross_encoder.predict([("warmup query", "warmup document")])
     logger.info("Warm-up complete — encoder, cross-encoder and DB pool ready")
 except Exception as e:
     logger.warning(f"Warm-up failed (non-fatal): {e}")

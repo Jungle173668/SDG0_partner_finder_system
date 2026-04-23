@@ -64,8 +64,6 @@ After saving the config, restart Claude Desktop. You should see the SDGZero tool
 - *"List all companies focused on Climate Action"*
   → calls `filter_companies(sdg="Climate Action")`
 
-- *"Tell me about heat-engineer-software-ltd"*
-  → calls `get_company(slug="heat-engineer-software-ltd")`
 
 - *"I run a carbon audit company in London. Find me partners."*
   → calls `find_partners(my_company_desc="...", city="London")`
