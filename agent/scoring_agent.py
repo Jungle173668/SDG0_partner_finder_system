@@ -303,7 +303,18 @@ def _run_reasoning(
         HumanMessage(content=prompt),
     ]
 
-    response = llm.invoke(messages)
+    import time
+    for attempt in range(3):
+        try:
+            response = llm.invoke(messages)
+            break
+        except Exception as e:
+            if "429" in str(e) and attempt < 2:
+                wait = 15 * (attempt + 1)
+                logger.warning(f"ScoringAgent: rate limit hit, retrying in {wait}s...")
+                time.sleep(wait)
+            else:
+                raise
     raw = response.content.strip()
 
     # Strip markdown code fences if LLM wraps output in ```json ... ```
@@ -444,12 +455,16 @@ def scoring_agent_node(state: AgentState) -> dict:
     # ------------------------------------------------------------------
     logger.info(f"ScoringAgent: generating reasoning for {len(top5)} companies (parallel)...")
 
+    import time as _time
+
     def _reason_one(args):
         idx, company = args
         slug           = company.get("slug") or company.get("id", "unknown")
         research_entry = research.get(slug, {})
         research_summary = research_entry.get("summary", "")
         source         = research_entry.get("source", "db")
+        # Stagger requests by 0.5s per slot to avoid TPM burst on Groq free tier
+        _time.sleep(idx * 0.5)
         try:
             reasoning = _run_reasoning(
                 user_company_desc=user_desc,

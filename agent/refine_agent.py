@@ -101,12 +101,17 @@ Do NOT put this in other_requirements.
 The user's type comes from user_company_desc — do NOT copy it into partner_type_desc. \
 e.g. user_company_desc = "we are a media company", user says "not skin-care" → \
 do NOT set partner_type_desc to "media company".
-14. Exclusion/negation about partner type ("not X", "don't need to be X", "exclude X", \
+14. Mode-only changes ("not must", "prefer is fine", "doesn't have to be", "make it soft"): \
+    if the user is changing the mode of an existing filter (not removing it), \
+    carry the CURRENT value forward and set the new mode. Do NOT set the value to null. \
+    e.g. "sdg is not must, but prefer" → keep current sdg_tags value, set mode to "soft". \
+    Only set a field to null/[] when the user explicitly says to remove/clear it entirely.
+15. Exclusion/negation about partner type ("not X", "don't need to be X", "exclude X", \
 "they do not have to be X") → set partner_type_desc to "" (empty string, clears the constraint). \
 Do NOT replace it with the user's own company type or any unrelated type. \
 Only set partner_type_desc to a new value when the user explicitly says what they DO want \
 (e.g. "find travel companies", "switch to retail brands").
-15. Removing a B-class filter ("remove SDG tag", "no city filter", "clear the sector filter", \
+16. Removing a B-class filter ("remove SDG tag", "no city filter", "clear the sector filter", \
 "remove all filters") → set that field to null or [] in changes. \
 e.g. "remove SDG tag" → {"sdg_tags": null}, "remove city filter" → {"city": null}.
 
@@ -173,6 +178,12 @@ User: "remove the SDG tag filter"
 
 User: "remove city filter, I don't need London anymore"
 → {"action":"refine","changes":{"city":null},"summary":"removed city filter"}
+
+User: "sdg is not must, but prefer" (current sdg_tags = ["Climate Action"])
+→ {"action":"refine","changes":{"sdg_tags":["Climate Action"]},"modes":{"sdg_tags":"soft"},"summary":"SDG filter → preferred"}
+
+User: "the sdg filter doesn't have to be a must, prefer is fine"
+→ {"action":"refine","changes":{"sdg_tags":["Climate Action"]},"modes":{"sdg_tags":"soft"},"summary":"SDG filter → preferred"}
 """
 
 _REFINE_HUMAN = """\
