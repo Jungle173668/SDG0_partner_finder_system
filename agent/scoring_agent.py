@@ -279,7 +279,7 @@ def _run_reasoning(
     llm = get_llm()
 
     extra = f"\nAdditional requirements for the ideal partner (NOT about my company): {other_requirements}" if other_requirements.strip() else ""
-    company_profile = _build_company_profile(company, research_summary)
+    company_profile = _build_company_profile(company, research_summary[:2000])
 
     # Build soft filter context hint for LLM
     soft_hits = _check_soft_filters(company, soft_filters)
@@ -463,8 +463,8 @@ def scoring_agent_node(state: AgentState) -> dict:
         research_entry = research.get(slug, {})
         research_summary = research_entry.get("summary", "")
         source         = research_entry.get("source", "db")
-        # Stagger requests by 0.5s per slot to avoid TPM burst on Groq free tier
-        _time.sleep(idx * 0.5)
+        # Stagger requests by 2s per slot to avoid TPM burst on Groq free tier
+        _time.sleep(idx * 2.0)
         try:
             reasoning = _run_reasoning(
                 user_company_desc=user_desc,

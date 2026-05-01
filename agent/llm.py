@@ -68,7 +68,7 @@ def get_llm(provider: Optional[str] = None):
             model=os.getenv("GROQ_MODEL", "llama-3.1-8b-instant"),
             api_key=api_key,
             temperature=0.3,
-            max_tokens=512,
+            max_tokens=256,
         )
 
     if provider == "ollama":
