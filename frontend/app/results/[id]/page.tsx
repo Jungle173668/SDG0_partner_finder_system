@@ -113,12 +113,6 @@ export default function ResultsPage() {
   if (stage !== "done" && stage !== "error") {
     return (
       <div className="min-h-[80vh] flex flex-col items-center justify-center px-4">
-        <div className="w-full max-w-sm mb-4 flex items-start gap-2 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 text-xs text-amber-800">
-          <svg className="w-3.5 h-3.5 mt-0.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-            <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
-          </svg>
-          <span><strong>Demo:</strong> Free-tier LLM API — search may take <strong>30–60s</strong> vs ~10–15s in production.</span>
-        </div>
         <div className="w-full max-w-sm mb-10">
           <PipelineSteps current={stage} />
         </div>
@@ -126,7 +120,7 @@ export default function ResultsPage() {
           <h2 className="text-xl font-bold text-navy">{STAGE_LABELS[stage]}</h2>
           <p className="text-gray-500 text-sm">
             Our AI pipeline is finding your best-matched partners.<br />
-            This typically takes 30–90 seconds.
+            This demo runs on a free-tier LLM API, so it typically takes <strong>30–90 seconds</strong>.
           </p>
           <p className="text-xs text-gray-400">{elapsed}s elapsed</p>
         </div>
