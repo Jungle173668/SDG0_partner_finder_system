@@ -127,6 +127,17 @@ export default function SearchForm() {
         </p>
       </div>
 
+      {/* Demo notice */}
+      <div className="flex items-start gap-2.5 bg-amber-50 border border-amber-200 rounded-lg px-4 py-3 text-xs text-amber-800">
+        <svg className="w-4 h-4 mt-0.5 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 9v4m0 4h.01M10.29 3.86L1.82 18a2 2 0 001.71 3h16.94a2 2 0 001.71-3L13.71 3.86a2 2 0 00-3.42 0z" />
+        </svg>
+        <span>
+          <strong>Demo notice:</strong> This demo runs on a free-tier LLM API, so searches may take
+          <strong> 30–60 seconds</strong>. A production deployment would complete in ~10–15 seconds.
+        </span>
+      </div>
+
       {/* Core inputs */}
       <div className="form-card space-y-5">
         <div>
