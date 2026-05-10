@@ -361,7 +361,7 @@ def scoring_agent_node(state: AgentState) -> dict:
             soft_filter_hit      (list[str], Phase 3 — empty placeholder for now)
 
     Step 1 — Cross-encoder rerank (DB text only, fits 512-token limit):
-        query    = user_company_desc  (original input, not HyDE — avoids drift)
+        query    = hypothetical_partner_desc (HyDE) or user_company_desc fallback
         document = company.document[:1500]
         → sort 10 candidates → keep Top-5
 
@@ -397,11 +397,18 @@ def scoring_agent_node(state: AgentState) -> dict:
     #
     # Falls back to user_company_desc only when HyDE is absent (filter-only path).
     hyde_desc    = state.get("hypothetical_partner_desc", "")
-    partner_type = state.get("partner_type_desc", "")
 
-    # Cross-encoder query anchor:
-    #   HyDE (passage-format description of the ideal partner) → ms-marco scores 0.80-0.96
-    #   Falls back to user_desc only on filter-only path (no HyDE generated).
+    # Cross-encoder query anchor priority:
+    #   1. hypothetical_partner_desc (HyDE) — professional company-profile vocabulary,
+    #      matches DB document style. partner_type_desc steers HyDE generation in
+    #      SearchAgent; by the time we reach ScoringAgent, HyDE already embeds that
+    #      intent in document-matching language.
+    #   2. user_company_desc — last resort (filter-only path, no description available).
+    #
+    # Why NOT partner_type_desc directly: it is user's casual/conversational text
+    # (e.g. "an art venue for ice-breaking activities"). ms-marco finds no vocabulary
+    # overlap with DB documents → scores collapse to ~0.001. HyDE translates the same
+    # intent into "exhibitions, workshops, team-building" — scores reach 0.80–0.96.
     if hyde_desc.strip():
         query  = hyde_desc.strip()
         anchor = "HyDE"
